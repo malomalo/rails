@@ -154,25 +154,6 @@ module ActiveRecord
 
     module ClassMethods # :nodoc:
       private
-        def define_non_cyclic_method(name, &block)
-          return if method_defined?(name, false)
-
-          define_method(name) do |*args|
-            result = true; @_already_called ||= {}
-            # Loop prevention for validation of associations
-            unless @_already_called[name]
-              begin
-                @_already_called[name] = true
-                result = instance_eval(&block)
-              ensure
-                @_already_called[name] = false
-              end
-            end
-
-            result
-          end
-        end
-
         # Adds validation and save callbacks for the association as specified by
         # the +reflection+.
         #
@@ -190,12 +171,12 @@ module ActiveRecord
           if reflection.collection?
             around_save :around_save_collection_association
 
-            define_non_cyclic_method(save_method) { save_collection_association(reflection) }
+            define_method(save_method) { save_collection_association(reflection) }
             # Doesn't use after_save as that would save associations added in after_create/after_update twice
             after_create save_method
             after_update save_method
           elsif reflection.has_one?
-            define_non_cyclic_method(save_method) { save_has_one_association(reflection) }
+            define_method(save_method) { save_has_one_association(reflection) }
             # Configures two callbacks instead of a single after_save so that
             # the model may rely on their execution order relative to its
             # own callbacks.
@@ -207,7 +188,7 @@ module ActiveRecord
             after_create save_method
             after_update save_method
           else
-            define_non_cyclic_method(save_method) { throw(:abort) if save_belongs_to_association(reflection) == false }
+            define_method(save_method) { throw(:abort) if save_belongs_to_association(reflection) == false }
             before_save save_method
           end
 
@@ -223,7 +204,7 @@ module ActiveRecord
               method = :validate_single_association
             end
 
-            define_non_cyclic_method(validation_method) { send(method, reflection) }
+            define_method(validation_method) { send(method, reflection) }
             validate validation_method
             after_validation :_ensure_no_duplicate_errors
           end
