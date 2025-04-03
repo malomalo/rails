@@ -15,6 +15,24 @@ module AssetTagHelperTestHelpers
   ensure
     ActionView::Helpers::AssetTagHelper.preload_links_header = original_preload_links_header
   end
+
+  def with_auto_include_nonce_for_scripts(new_auto_include_nonce_for_scripts = true)
+    original_auto_include_nonce_for_scripts = ActionView::Helpers::AssetTagHelper.auto_include_nonce_for_scripts
+    ActionView::Helpers::AssetTagHelper.auto_include_nonce_for_scripts = new_auto_include_nonce_for_scripts
+
+    yield
+  ensure
+    ActionView::Helpers::AssetTagHelper.auto_include_nonce_for_scripts = original_auto_include_nonce_for_scripts
+  end
+
+  def with_auto_include_nonce_for_styles(new_auto_include_nonce_for_styles = true)
+    original_auto_include_nonce_for_styles = ActionView::Helpers::AssetTagHelper.auto_include_nonce_for_styles
+    ActionView::Helpers::AssetTagHelper.auto_include_nonce_for_styles = new_auto_include_nonce_for_styles
+
+    yield
+  ensure
+    ActionView::Helpers::AssetTagHelper.auto_include_nonce_for_styles = original_auto_include_nonce_for_styles
+  end
 end
 
 class AssetTagHelperTest < ActionView::TestCase
@@ -25,7 +43,7 @@ class AssetTagHelperTest < ActionView::TestCase
   attr_reader :request, :response
 
   class FakeRequest
-    attr_accessor :script_name
+    attr_accessor :script_name, :content_security_policy_nonce_directives
     def protocol() "http://" end
     def ssl?() false end
     def host_with_port() "localhost" end
@@ -540,6 +558,12 @@ class AssetTagHelperTest < ActionView::TestCase
     assert_dom_equal %(<script src="/javascripts/bank.js" nonce="iyhD0Yc0W+c="></script>), javascript_include_tag("bank", nonce: true)
   end
 
+  def test_javascript_include_tag_nonce_with_auto_nonce
+    with_auto_include_nonce_for_scripts do
+      assert_dom_equal %(<script src="/javascripts/bank.js" nonce="iyhD0Yc0W+c="></script>), javascript_include_tag("bank")
+    end
+  end
+
   def test_stylesheet_path
     StylePathToTag.each { |method, tag| assert_dom_equal(tag, eval(method)) }
   end
@@ -562,6 +586,12 @@ class AssetTagHelperTest < ActionView::TestCase
 
   def test_stylesheet_link_tag_nonce
     assert_dom_equal %(<link rel="stylesheet" href="/stylesheets/foo.css" nonce="iyhD0Yc0W+c="></link>), stylesheet_link_tag("foo.css", nonce: true)
+  end
+
+  def test_stylesheet_link_tag_nonce_with_auto_nonce
+    with_auto_include_nonce_for_styles do
+      assert_dom_equal %(<link rel="stylesheet" href="/stylesheets/foo.css" nonce="iyhD0Yc0W+c="></link>), stylesheet_link_tag("foo.css")
+    end
   end
 
   def test_stylesheet_link_tag_with_missing_source
@@ -634,7 +664,7 @@ class AssetTagHelperTest < ActionView::TestCase
       stylesheet_link_tag("http://example.com/style.css")
       javascript_include_tag("http://example.com/all.js")
       expected = "<http://example.com/style.css>; rel=preload; as=style; nopush,<http://example.com/all.js>; rel=preload; as=script; nopush"
-      assert_equal expected, @response.headers["Link"]
+      assert_equal expected, @response.headers["link"]
     end
   end
 
@@ -642,7 +672,7 @@ class AssetTagHelperTest < ActionView::TestCase
     with_preload_links_header do
       stylesheet_link_tag("data:text/css;base64,YWxlcnQoIkhlbGxvIik7")
       javascript_include_tag("data:text/javascript;base64,YWxlcnQoIkhlbGxvIik7")
-      assert_nil @response.headers["Link"]
+      assert_nil @response.headers["link"]
     end
   end
 
@@ -650,7 +680,7 @@ class AssetTagHelperTest < ActionView::TestCase
     with_preload_links_header do
       stylesheet_link_tag("http://example.com/style.css", preload_links_header: false)
       javascript_include_tag("http://example.com/all.js", preload_links_header: false)
-      assert_nil @response.headers["Link"]
+      assert_nil @response.headers["link"]
     end
   end
 
@@ -659,7 +689,7 @@ class AssetTagHelperTest < ActionView::TestCase
       stylesheet_link_tag("http://example.com/style.css", preload_links_header: true)
       javascript_include_tag("http://example.com/all.js", preload_links_header: true)
       expected = "<http://example.com/style.css>; rel=preload; as=style; nopush,<http://example.com/all.js>; rel=preload; as=script; nopush"
-      assert_equal expected, @response.headers["Link"]
+      assert_equal expected, @response.headers["link"]
     end
   end
 
@@ -669,7 +699,7 @@ class AssetTagHelperTest < ActionView::TestCase
         stylesheet_link_tag("http://example.com/style.css?#{i}")
         javascript_include_tag("http://example.com/all.js?#{i}")
       end
-      links = @response.headers["Link"].count(",")
+      links = @response.headers["link"].count(",")
       assert_equal 14, links
     end
   end
@@ -677,7 +707,7 @@ class AssetTagHelperTest < ActionView::TestCase
   def test_should_not_preload_links_with_defer
     with_preload_links_header do
       javascript_include_tag("http://example.com/all.js", defer: true)
-      assert_nil @response.headers["Link"]
+      assert_nil @response.headers["link"]
     end
   end
 
@@ -686,7 +716,7 @@ class AssetTagHelperTest < ActionView::TestCase
       stylesheet_link_tag("http://example.com/style.css", nopush: false)
       javascript_include_tag("http://example.com/all.js", nopush: false)
       expected = "<http://example.com/style.css>; rel=preload; as=style,<http://example.com/all.js>; rel=preload; as=script"
-      assert_equal expected, @response.headers["Link"]
+      assert_equal expected, @response.headers["link"]
     end
   end
 
@@ -695,7 +725,7 @@ class AssetTagHelperTest < ActionView::TestCase
       stylesheet_link_tag("http://example.com/style.css", crossorigin: "use-credentials")
       javascript_include_tag("http://example.com/all.js", crossorigin: true)
       expected = "<http://example.com/style.css>; rel=preload; as=style; crossorigin=use-credentials; nopush,<http://example.com/all.js>; rel=preload; as=script; crossorigin=anonymous; nopush"
-      assert_equal expected, @response.headers["Link"]
+      assert_equal expected, @response.headers["link"]
     end
   end
 
@@ -703,7 +733,7 @@ class AssetTagHelperTest < ActionView::TestCase
     with_preload_links_header do
       javascript_include_tag("http://example.com/all.js", type: "module")
       expected = "<http://example.com/all.js>; rel=modulepreload; as=script; nopush"
-      assert_equal expected, @response.headers["Link"]
+      assert_equal expected, @response.headers["link"]
     end
   end
 
@@ -711,7 +741,7 @@ class AssetTagHelperTest < ActionView::TestCase
     with_preload_links_header do
       preload_link_tag("http://example.com/all.js", type: "module")
       expected = "<http://example.com/all.js>; rel=modulepreload; as=script; type=module"
-      assert_equal expected, @response.headers["Link"]
+      assert_equal expected, @response.headers["link"]
     end
   end
 
@@ -720,15 +750,36 @@ class AssetTagHelperTest < ActionView::TestCase
       stylesheet_link_tag("http://example.com/style.css", integrity: "sha256-AbpHGcgLb+kRsJGnwFEktk7uzpZOCcBY74+YBdrKVGs")
       javascript_include_tag("http://example.com/all.js", integrity: "sha256-AbpHGcgLb+kRsJGnwFEktk7uzpZOCcBY74+YBdrKVGs")
       expected = "<http://example.com/style.css>; rel=preload; as=style; integrity=sha256-AbpHGcgLb+kRsJGnwFEktk7uzpZOCcBY74+YBdrKVGs; nopush,<http://example.com/all.js>; rel=preload; as=script; integrity=sha256-AbpHGcgLb+kRsJGnwFEktk7uzpZOCcBY74+YBdrKVGs; nopush"
-      assert_equal expected, @response.headers["Link"]
+      assert_equal expected, @response.headers["link"]
     end
+  end
+
+  def test_should_set_preload_links_with_nonce
+    @request.content_security_policy_nonce_directives = %w(script-src)
+    with_preload_links_header do
+      preload_link_tag("http://example.com/preload.js")
+      stylesheet_link_tag("http://example.com/style.css", nonce: true)
+      javascript_include_tag("http://example.com/all.js", nonce: true)
+      expected = "<http://example.com/preload.js>; rel=preload; as=script; type=text/javascript; nonce=iyhD0Yc0W+c=,<http://example.com/style.css>; rel=preload; as=style; nonce=iyhD0Yc0W+c=; nopush,<http://example.com/all.js>; rel=preload; as=script; nonce=iyhD0Yc0W+c=; nopush"
+      assert_equal expected, @response.headers["link"]
+    end
+  end
+
+  def test_should_set_preload_link_tag_nonce_if_listed_in_csp_directives
+    @request.content_security_policy_nonce_directives = %w(script-src)
+    assert_equal %(<link rel="preload" href="/application.js" as="script" type="text/javascript" nonce="iyhD0Yc0W+c=">), preload_link_tag("/application.js")
+    assert_equal %(<link rel="preload" href="/style.css" as="style" type="text/css">), preload_link_tag("/style.css")
+
+    @request.content_security_policy_nonce_directives = %w(style-src)
+    assert_equal %(<link rel="preload" href="/application.js" as="script" type="text/javascript">), preload_link_tag("/application.js")
+    assert_equal %(<link rel="preload" href="/style.css" as="style" type="text/css" nonce="iyhD0Yc0W+c=">), preload_link_tag("/style.css")
   end
 
   def test_should_not_preload_links_when_disabled
     with_preload_links_header(false) do
       stylesheet_link_tag("http://example.com/style.css")
       javascript_include_tag("http://example.com/all.js")
-      assert_nil @response.headers["Link"]
+      assert_nil @response.headers["link"]
     end
   end
 

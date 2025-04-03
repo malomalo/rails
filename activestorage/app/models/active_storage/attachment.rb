@@ -138,7 +138,7 @@ class ActiveStorage::Attachment < ActiveStorage::Record
         end
       }
 
-      if blob.preview_image_needed_before_processing_variants?
+      if blob.preview_image_needed_before_processing_variants? && preprocessed_variations.any?
         blob.create_preview_image_later(preprocessed_variations)
       else
         preprocessed_variations.each do |transformations|
@@ -156,7 +156,7 @@ class ActiveStorage::Attachment < ActiveStorage::Record
     end
 
     def named_variants
-      record.attachment_reflections[name]&.named_variants
+      record.attachment_reflections[name]&.named_variants || {}
     end
 
     def transformations_by_name(transformations)

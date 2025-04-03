@@ -22,9 +22,19 @@ module ActionController
     # database on the main thread, so they could open a txn, then the controller
     # thread will open a new connection and try to access data that's only visible
     # to the main thread's txn. This is the problem in #23483.
+    alias_method :original_new_controller_thread, :new_controller_thread
+
     silence_redefinition_of_method :new_controller_thread
     def new_controller_thread # :nodoc:
       yield
+    end
+
+    # Because of the above, we need to prevent the clearing of thread locals, since
+    # no new thread is actually spawned in the test environment.
+    alias_method :original_clean_up_thread_locals, :clean_up_thread_locals
+
+    silence_redefinition_of_method :clean_up_thread_locals
+    def clean_up_thread_locals(*args) # :nodoc:
     end
 
     # Avoid a deadlock from the queue filling up
@@ -106,7 +116,7 @@ module ActionController
             set_header k, "application/x-www-form-urlencoded"
           end
 
-          case content_mime_type.to_sym
+          case content_mime_type&.to_sym
           when nil
             raise "Unknown Content-Type: #{content_type}"
           when :json
@@ -121,7 +131,7 @@ module ActionController
           end
         end
 
-        data_stream = StringIO.new(data)
+        data_stream = StringIO.new(data.b)
         set_header "CONTENT_LENGTH", data_stream.length.to_s
         set_header "rack.input", data_stream
       end
@@ -288,14 +298,16 @@ module ActionController
   # ActionController::TestCase will also automatically provide the following
   # instance variables for use in the tests:
   #
-  # **@controller**
+  # @controller
   # :   The controller instance that will be tested.
-  # **@request**
+  #
+  # @request
   # :   An ActionController::TestRequest, representing the current HTTP request.
   #     You can modify this object before sending the HTTP request. For example,
   #     you might want to set some session properties before sending a GET
   #     request.
-  # **@response**
+  #
+  # @response
   # :   An ActionDispatch::TestResponse object, representing the response of the
   #     last HTTP response. In the above example, `@response` becomes valid after
   #     calling `post`. If the various assert methods are not sufficient, then you
@@ -425,9 +437,7 @@ module ActionController
       # Note that the request method is not verified. The different methods are
       # available to make the tests more expressive.
       def get(action, **args)
-        res = process(action, method: "GET", **args)
-        cookies.update res.cookies
-        res
+        process(action, method: "GET", **args)
       end
 
       # Simulate a POST request with the given parameters and set/volley the response.
@@ -635,6 +645,7 @@ module ActionController
               unless @request.cookie_jar.committed?
                 @request.cookie_jar.write(@response)
                 cookies.update(@request.cookie_jar.instance_variable_get(:@cookies))
+                cookies.update(@response.cookies)
               end
             end
             @response.prepare!

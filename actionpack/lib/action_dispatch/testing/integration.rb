@@ -8,6 +8,7 @@ require "rack/test"
 require "active_support/test_case"
 
 require "action_dispatch/testing/request_encoder"
+require "action_dispatch/testing/test_helpers/page_dump_helper"
 
 module ActionDispatch
   module Integration # :nodoc:
@@ -283,7 +284,17 @@ module ActionDispatch
 
         # NOTE: rack-test v0.5 doesn't build a default uri correctly Make sure requested
         # path is always a full URI.
-        session.request(build_full_uri(path, request_env), request_env)
+        uri = build_full_uri(path, request_env)
+
+        if method == :get && String === request_env[:params]
+          # rack-test will needlessly parse and rebuild a :params
+          # querystring, using Rack's query parser. At best that's a
+          # waste of time; at worst it can change the value.
+
+          uri << "?" << request_env.delete(:params)
+        end
+
+        session.request(uri, request_env)
 
         @request_count += 1
         @request = ActionDispatch::Request.new(session.last_request.env)
@@ -538,7 +549,7 @@ module ActionDispatch
   #         https!(false)
   #         get "/articles/all"
   #         assert_response :success
-  #         assert_select 'h1', 'Articles'
+  #         assert_dom 'h1', 'Articles'
   #       end
   #     end
   #
@@ -577,7 +588,7 @@ module ActionDispatch
   #           def browses_site
   #             get "/products/all"
   #             assert_response :success
-  #             assert_select 'h1', 'Products'
+  #             assert_dom 'h1', 'Products'
   #           end
   #         end
   #
@@ -651,6 +662,7 @@ module ActionDispatch
 
       include Integration::Runner
       include ActionController::TemplateAssertions
+      include TestHelpers::PageDumpHelper
 
       included do
         include ActionDispatch::Routing::UrlFor

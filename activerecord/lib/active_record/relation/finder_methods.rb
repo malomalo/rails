@@ -141,14 +141,14 @@ module ActiveRecord
     #
     #   Product.where(["price = %?", price]).sole
     def sole
-      found, undesired = first(2)
+      found, undesired = take(2)
 
       if found.nil?
         raise_record_not_found_exception!
-      elsif undesired.present?
-        raise ActiveRecord::SoleRecordExceeded.new(self)
-      else
+      elsif undesired.nil?
         found
+      else
+        raise ActiveRecord::SoleRecordExceeded.new(model)
       end
     end
 
@@ -374,7 +374,11 @@ module ActiveRecord
       relation = construct_relation_for_exists(conditions)
       return false if relation.where_clause.contradiction?
 
-      skip_query_cache_if_necessary { connection.select_rows(relation.arel, "#{name} Exists?").size == 1 }
+      skip_query_cache_if_necessary do
+        with_connection do |c|
+          c.select_rows(relation.arel, "#{model.name} Exists?").size == 1
+        end
+      end
     end
 
     # Returns true if the relation contains the given record or false otherwise.
@@ -385,7 +389,7 @@ module ActiveRecord
     def include?(record)
       # The existing implementation relies on receiving an Active Record instance as the input parameter named record.
       # Any non-Active Record object passed to this implementation is guaranteed to return `false`.
-      return false unless record.is_a?(klass)
+      return false unless record.is_a?(model)
 
       if loaded? || offset_value || limit_value || having_clause.any?
         records.include?(record)
@@ -411,9 +415,9 @@ module ActiveRecord
     # the expected number of results should be provided in the +expected_size+
     # argument.
     def raise_record_not_found_exception!(ids = nil, result_size = nil, expected_size = nil, key = primary_key, not_found_ids = nil) # :nodoc:
-      conditions = " [#{arel.where_sql(klass)}]" unless where_clause.empty?
+      conditions = " [#{arel.where_sql(model)}]" unless where_clause.empty?
 
-      name = @klass.name
+      name = model.name
 
       if ids.nil?
         error = +"Couldn't find #{name}"
@@ -437,7 +441,7 @@ module ActiveRecord
         if distinct_value && offset_value
           relation = except(:order).limit!(1)
         else
-          relation = except(:select, :distinct, :order)._select!(ONE_AS_ONE).limit!(1)
+          relation = except(:select, :distinct, :order)._select!(Arel.sql(ONE_AS_ONE, retryable: true)).limit!(1)
         end
 
         case conditions
@@ -467,7 +471,9 @@ module ActiveRecord
             )
           )
           relation = skip_query_cache_if_necessary do
-            klass.connection.distinct_relation_for_primary_key(relation)
+            model.with_connection do |c|
+              c.distinct_relation_for_primary_key(relation)
+            end
           end
         end
 
@@ -483,9 +489,9 @@ module ActiveRecord
       end
 
       def find_with_ids(*ids)
-        raise UnknownPrimaryKey.new(@klass) if primary_key.nil?
+        raise UnknownPrimaryKey.new(model) if primary_key.nil?
 
-        expects_array = if klass.composite_primary_key?
+        expects_array = if model.composite_primary_key?
           ids.first.first.is_a?(Array)
         else
           ids.first.is_a?(Array)
@@ -497,7 +503,7 @@ module ActiveRecord
 
         ids = ids.compact.uniq
 
-        model_name = @klass.name
+        model_name = model.name
 
         case ids.size
         when 0
@@ -519,7 +525,7 @@ module ActiveRecord
           MSG
         end
 
-        relation = if klass.composite_primary_key?
+        relation = if model.composite_primary_key?
           where(primary_key.zip(id).to_h)
         else
           where(primary_key => id)
@@ -567,7 +573,7 @@ module ActiveRecord
         result = relation.records
 
         if result.size == ids.size
-          result.in_order_of(:id, ids.map { |id| @klass.type_for_attribute(primary_key).cast(id) })
+          result.in_order_of(:id, ids.map { |id| model.type_for_attribute(primary_key).cast(id) })
         else
           raise_record_not_found_exception!(ids, result.size, ids.size)
         end
@@ -632,7 +638,7 @@ module ActiveRecord
       end
 
       def ordered_relation
-        if order_values.empty? && (implicit_order_column || !query_constraints_list.nil? || primary_key)
+        if order_values.empty? && !_order_columns.empty?
           order(_order_columns.map { |column| table[column].asc })
         else
           self
@@ -640,16 +646,13 @@ module ActiveRecord
       end
 
       def _order_columns
-        oc = []
+        columns = Array(model.implicit_order_column)
 
-        oc << implicit_order_column if implicit_order_column
-        oc << query_constraints_list if query_constraints_list
+        return columns.compact if columns.length.positive? && columns.last.nil?
 
-        if primary_key && query_constraints_list.nil?
-          oc << primary_key
-        end
+        columns += Array(model.query_constraints_list || model.primary_key)
 
-        oc.flatten.uniq.compact
+        columns.uniq.compact
       end
   end
 end

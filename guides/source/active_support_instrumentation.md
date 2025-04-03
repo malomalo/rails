@@ -1,4 +1,4 @@
-**DO NOT READ THIS FILE ON GITHUB, GUIDES ARE PUBLISHED ON https://guides.rubyonrails.org.**
+**DO NOT READ THIS FILE ON GITHUB, GUIDES ARE PUBLISHED ON <https://guides.rubyonrails.org>.**
 
 Active Support Instrumentation
 ==============================
@@ -213,7 +213,7 @@ Additional keys may be added by the caller.
 }
 ```
 
-### Action Controller — Caching
+### Action Controller: Caching
 
 #### `write_fragment.action_controller`
 
@@ -355,17 +355,20 @@ The `:cache_hits` key is only included if the collection is rendered with `cache
 
 #### `sql.active_record`
 
-| Key                  | Value                                    |
-| -------------------- | ---------------------------------------- |
-| `:sql`               | SQL statement                            |
-| `:name`              | Name of the operation                    |
-| `:connection`        | Connection object                        |
-| `:binds`             | Bind parameters                          |
-| `:type_casted_binds` | Typecasted bind parameters               |
-| `:statement_name`    | SQL Statement name                       |
-| `:async`             | `true` if query is loaded asynchronously |
-| `:cached`            | `true` is added when cached queries used |
-| `:row_count`         | Number of rows returned by the query     |
+| Key                  | Value                                                  |
+| -------------------- | ------------------------------------------------------ |
+| `:sql`               | SQL statement                                          |
+| `:name`              | Name of the operation                                  |
+| `:binds`             | Bind parameters                                        |
+| `:type_casted_binds` | Typecasted bind parameters                             |
+| `:async`             | `true` if query is loaded asynchronously               |
+| `:allow_retry`       | `true` if the query can be automatically retried       |
+| `:connection`        | Connection object                                      |
+| `:transaction`       | Current transaction, if any                            |
+| `:affected_rows`     | Number of rows affected by the query                   |
+| `:row_count`         | Number of rows returned by the query                   |
+| `:cached`            | `true` is added when result comes from the query cache |
+| `:statement_name`    | SQL Statement name (Postgres only)                     |
 
 Adapters may add their own data as well.
 
@@ -373,13 +376,19 @@ Adapters may add their own data as well.
 {
   sql: "SELECT \"posts\".* FROM \"posts\" ",
   name: "Post Load",
-  connection: <ActiveRecord::ConnectionAdapters::SQLite3Adapter:0x00007f9f7a838850>,
   binds: [<ActiveModel::Attribute::WithCastValue:0x00007fe19d15dc00>],
   type_casted_binds: [11],
+  async: false,
+  allow_retry: true,
+  connection: <ActiveRecord::ConnectionAdapters::SQLite3Adapter:0x00007f9f7a838850>,
+  transaction: <ActiveRecord::ConnectionAdapters::RealTransaction:0x0000000121b5d3e0>
+  affected_rows: 0
+  row_count: 5,
   statement_name: nil,
-  row_count: 5
 }
 ```
+
+If the query is not executed in the context of a transaction, `:transaction` is `nil`.
 
 #### `strict_loading_violation.active_record`
 
@@ -405,6 +414,67 @@ This event is only emitted when [`config.active_record.action_on_strict_loading_
   class_name: "User"
 }
 ```
+
+#### `start_transaction.active_record`
+
+This event is emitted when a transaction has been started.
+
+| Key                  | Value                                                |
+| -------------------- | ---------------------------------------------------- |
+| `:transaction`       | Transaction object                                   |
+| `:connection`        | Connection object                                    |
+
+Please, note that Active Record does not create the actual database transaction
+until needed:
+
+```ruby
+ActiveRecord::Base.transaction do
+  # We are inside the block, but no event has been triggered yet.
+
+  # The following line makes Active Record start the transaction.
+  User.count # Event fired here.
+end
+```
+
+Remember that ordinary nested calls do not create new transactions:
+
+```ruby
+ActiveRecord::Base.transaction do |t1|
+  User.count # Fires an event for t1.
+  ActiveRecord::Base.transaction do |t2|
+    # The next line fires no event for t2, because the only
+    # real database transaction in this example is t1.
+    User.first.touch
+  end
+end
+```
+
+However, if `requires_new: true` is passed, you get an event for the nested
+transaction too. This might be a savepoint under the hood:
+
+```ruby
+ActiveRecord::Base.transaction do |t1|
+  User.count # Fires an event for t1.
+  ActiveRecord::Base.transaction(requires_new: true) do |t2|
+    User.first.touch # Fires an event for t2.
+  end
+end
+```
+
+#### `transaction.active_record`
+
+This event is emitted when a database transaction finishes. The state of the
+transaction can be found in the `:outcome` key.
+
+| Key                  | Value                                                |
+| -------------------- | ---------------------------------------------------- |
+| `:transaction`       | Transaction object                                   |
+| `:outcome`           | `:commit`, `:rollback`, `:restart`, or `:incomplete` |
+| `:connection`        | Connection object                                    |
+
+In practice, you cannot do much with the transaction object, but it may still be
+helpful for tracing database activity. For example, by tracking
+`transaction.uuid`.
 
 ### Action Mailer
 
@@ -452,7 +522,7 @@ This event is only emitted when [`config.active_record.action_on_strict_loading_
 }
 ```
 
-### Active Support — Caching
+### Active Support: Caching
 
 #### `cache_read.active_support`
 
@@ -534,9 +604,6 @@ Cache stores may add their own data as well.
 
 #### `cache_increment.active_support`
 
-This event is only emitted when using [`MemCacheStore`][ActiveSupport::Cache::MemCacheStore]
-or [`RedisCacheStore`][ActiveSupport::Cache::RedisCacheStore].
-
 | Key       | Value                   |
 | --------- | ----------------------- |
 | `:key`    | Key used in the store   |
@@ -552,8 +619,6 @@ or [`RedisCacheStore`][ActiveSupport::Cache::RedisCacheStore].
 ```
 
 #### `cache_decrement.active_support`
-
-This event is only emitted when using the Memcached or Redis cache stores.
 
 | Key       | Value                   |
 | --------- | ----------------------- |
@@ -662,7 +727,7 @@ This event is only emitted when using [`MemoryStore`][ActiveSupport::Cache::Memo
 [ActiveSupport::Cache::Store#fetch]: https://api.rubyonrails.org/classes/ActiveSupport/Cache/Store.html#method-i-fetch
 [ActiveSupport::Cache::Store#fetch_multi]: https://api.rubyonrails.org/classes/ActiveSupport/Cache/Store.html#method-i-fetch_multi
 
-### Active Support — Messages
+### Active Support: Messages
 
 #### `message_serializer_fallback.active_support`
 
@@ -799,7 +864,7 @@ This event is only emitted when using [`MemoryStore`][ActiveSupport::Cache::Memo
 | ------------ | ------------------------------ |
 | `:analyzer`  | Name of analyzer e.g., ffprobe |
 
-### Active Storage — Storage Service
+### Active Storage: Storage Service
 
 #### `service_upload.active_storage`
 
@@ -916,7 +981,7 @@ This event is only emitted when using the Google Cloud Storage service.
 Exceptions
 ----------
 
-If an exception happens during any instrumentation the payload will include
+If an exception happens during any instrumentation, the payload will include
 information about it.
 
 | Key                 | Value                                                          |

@@ -19,6 +19,18 @@ require "models/cpk"
 class AttributeMethodsTest < ActiveRecord::TestCase
   include InTimeZone
 
+  class EpochTimestamp < ActiveRecord::Type::DateTime
+    def deserialize(time_or_int)
+      Time.at(time_or_int).utc if time_or_int
+    end
+
+    def serialize(time)
+      time.to_i if time
+    end
+  end
+
+  ActiveRecord::Type.register(:epoch_timestamp, EpochTimestamp)
+
   fixtures :topics, :developers, :companies, :computers
 
   def setup
@@ -692,23 +704,13 @@ class AttributeMethodsTest < ActiveRecord::TestCase
 
   test "typecast attribute from select to false" do
     Topic.create(title: "Budget")
-    # Oracle does not support boolean expressions in SELECT.
-    if current_adapter?(:OracleAdapter)
-      topic = Topic.all.merge!(select: "topics.*, 0 as is_test").first
-    else
-      topic = Topic.all.merge!(select: "topics.*, 1=2 as is_test").first
-    end
+    topic = Topic.all.merge!(select: "topics.*, 1=2 as is_test").first
     assert_not_predicate topic, :is_test?
   end
 
   test "typecast attribute from select to true" do
     Topic.create(title: "Budget")
-    # Oracle does not support boolean expressions in SELECT.
-    if current_adapter?(:OracleAdapter)
-      topic = Topic.all.merge!(select: "topics.*, 1 as is_test").first
-    else
-      topic = Topic.all.merge!(select: "topics.*, 2=2 as is_test").first
-    end
+    topic = Topic.all.merge!(select: "topics.*, 2=2 as is_test").first
     assert_predicate topic, :is_test?
   end
 
@@ -921,9 +923,67 @@ class AttributeMethodsTest < ActiveRecord::TestCase
   end
 
   test "time zone-aware attributes do not recurse infinitely on invalid values" do
+    model = new_topic_like_ar_class { }
+
+    type = model.type_for_attribute(:bonus_time)
+    assert_kind_of ActiveRecord::Type::Time, type
+
+    invalid_time = []
+    record = model.new(bonus_time: invalid_time)
+    assert_equal invalid_time, record.bonus_time
+
+    invalid_time = Time.current.utc.to_i
+    record = model.new(bonus_time: invalid_time)
+    assert_equal invalid_time, record.bonus_time
+
     in_time_zone "Pacific Time (US & Canada)" do
-      record = @target.new(bonus_time: [])
-      assert_nil record.bonus_time
+      model = new_topic_like_ar_class { }
+
+      type = model.type_for_attribute(:bonus_time)
+      assert_kind_of ActiveRecord::AttributeMethods::TimeZoneConversion::TimeZoneConverter, type
+
+      invalid_time = []
+      record = model.new(bonus_time: invalid_time)
+      assert_equal invalid_time, record.bonus_time
+
+      invalid_time = Time.current.utc.to_i
+      record = model.new(bonus_time: invalid_time)
+      assert_equal invalid_time, record.bonus_time
+    end
+  end
+
+  test "time zone-aware custom attributes" do
+    timestamp = Time.current.utc.to_i
+
+    model = Class.new(ActiveRecord::Base)
+    model.table_name = "minimalistics"
+
+    model.attribute :expires_at, :epoch_timestamp
+
+    type = model.type_for_attribute(:expires_at)
+    assert_kind_of EpochTimestamp, type
+
+    record_1 = model.create!(expires_at: timestamp)
+    assert_equal timestamp, record_1.expires_at.to_i
+
+    model.insert!({ expires_at: timestamp })
+    record_2 = model.last
+    assert_not_equal record_1, record_2
+    assert_equal timestamp, record_2.expires_at.to_i
+
+    in_time_zone "Pacific Time (US & Canada)" do
+      model.attribute :expires_at, :epoch_timestamp
+
+      type = model.type_for_attribute(:expires_at)
+      assert_kind_of ActiveRecord::AttributeMethods::TimeZoneConversion::TimeZoneConverter, type
+
+      record_1 = model.create!(expires_at: timestamp)
+      assert_equal timestamp, record_1.expires_at.to_i
+
+      model.insert!({ expires_at: timestamp })
+      record_2 = model.last
+      assert_not_equal record_1, record_2
+      assert_equal timestamp, record_2.expires_at.to_i
     end
   end
 
@@ -1075,12 +1135,87 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     assert_equal "New topic", topic.title_alias_to_be_undefined
   end
 
+  test "#define_attribute_methods doesn't connect to the database when schema cache is present" do
+    with_temporary_connection_pool do
+      if in_memory_db?
+        # Separate connections to an in-memory database create an entirely new database,
+        # with an empty schema etc, so we just stub out this schema on the fly.
+        ActiveRecord::Base.connection_pool.with_connection do |connection|
+          connection.create_table :tasks do |t|
+            t.datetime :starting
+            t.datetime :ending
+          end
+        end
+      end
+
+      @target.table_name = "tasks"
+
+      @target.connection_pool.schema_cache.load!
+      @target.connection_pool.schema_cache.add("tasks")
+      @target.connection_pool.disconnect!
+
+      assert_no_queries(include_schema: true) do
+        @target.define_attribute_methods
+      end
+    ensure
+      ActiveRecord::Base.connection_pool.disconnect!
+    end
+  end
+
   test "define_attribute_method works with both symbol and string" do
     klass = Class.new(ActiveRecord::Base)
     klass.table_name = "foo"
 
     assert_nothing_raised { klass.define_attribute_method(:foo) }
     assert_nothing_raised { klass.define_attribute_method("bar") }
+  end
+
+  test "#method_missing define methods on the fly in a thread safe way" do
+    topic_class = Class.new(ActiveRecord::Base) do
+      self.table_name = "topics"
+    end
+
+    topic = topic_class.new(title: "New topic")
+    topic_class.undefine_attribute_methods
+    def topic.method_missing(...)
+      sleep 0.1 # required to cause a race condition
+      super
+    end
+
+    threads = 5.times.map do
+      Thread.new do
+        assert_equal "New topic", topic.title
+      end
+    end
+    threads.each(&:join)
+  ensure
+    threads&.each(&:kill)
+  end
+
+  test "#method_missing define methods on the fly in a thread safe way, even when decorated" do
+    topic_class = Class.new(ActiveRecord::Base) do
+      self.table_name = "topics"
+
+      def title
+        "title:#{super}"
+      end
+    end
+
+    topic = topic_class.new(title: "New topic")
+    topic_class.undefine_attribute_methods
+    def topic.method_missing(...)
+      sleep 0.1 # required to cause a race condition
+      super
+    end
+
+    threads = 5.times.map do
+      Thread.new do
+        assert_equal "title:New topic", topic.title
+      end
+    end
+    threads.each(&:join)
+  ensure
+    threads&.each(&:kill)
   end
 
   test "read_attribute with nil should not asplode" do
@@ -1227,64 +1362,67 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     alias_attribute :subject, :title
   end
 
+  test "#alias_attribute override methods defined in parent models" do
+    parent_model = Class.new(ActiveRecord::Base) do
+      self.abstract_class = true
+
+      def subject
+        "Abstract Subject"
+      end
+    end
+
+    subclass = Class.new(parent_model) do
+      self.table_name = "topics"
+      alias_attribute :subject, :title
+    end
+
+    obj = subclass.new
+    obj.title = "hey"
+    assert_equal("hey", obj.subject)
+  end
+
   test "aliases to the same attribute name do not conflict with each other" do
     first_model_object = ToBeLoadedFirst.new(author_name: "author 1")
     assert_equal("author 1", first_model_object.subject)
+    assert_equal([nil, "author 1"], first_model_object.subject_change)
     second_model_object = ToBeLoadedSecond.new(title: "foo")
     assert_equal("foo", second_model_object.subject)
+    assert_equal([nil, "foo"], second_model_object.subject_change)
   end
 
-  ClassWithDeprecatedAliasAttributeBehavior = Class.new(ActiveRecord::Base) do
-    self.table_name = "topics"
-    alias_attribute :subject, :title
+  test "#alias_attribute with an overridden original method does not use the overridden original method" do
+    class_with_deprecated_alias_attribute_behavior = Class.new(ActiveRecord::Base) do
+      self.table_name = "topics"
+      alias_attribute :subject, :title
 
-    def title_was
-      "overridden_title_was"
+      def title_was
+        "overridden_title_was"
+      end
     end
-  end
 
-  test "#alias_attribute with an overridden original method issues a deprecation" do
-    message = <<~MESSAGE.gsub("\n", " ")
-      AttributeMethodsTest::ClassWithDeprecatedAliasAttributeBehavior model aliases
-      `title` and has a method called `title_was` defined.
-      Starting in Rails 7.2 `subject_was` will not be calling `title_was` anymore.
-      You may want to additionally define `subject_was` to preserve the current behavior.
-    MESSAGE
-
-    obj = assert_deprecated(message, ActiveRecord.deprecator) do
-      ClassWithDeprecatedAliasAttributeBehavior.new
-    end
+    obj = class_with_deprecated_alias_attribute_behavior.new
     obj.title = "hey"
     assert_equal("hey", obj.subject)
-    assert_equal("overridden_title_was", obj.subject_was)
+    assert_nil(obj.subject_was)
   end
 
-  TitleWasOverride = Module.new do
-    def title_was
-      "overridden_title_was"
+  test "#alias_attribute with an overridden original method from a module does not use the overridden original method" do
+    title_was_override = Module.new do
+      def title_was
+        "overridden_title_was"
+      end
     end
-  end
 
-  ClassWithDeprecatedAliasAttributeBehaviorFromModule = Class.new(ActiveRecord::Base) do
-    self.table_name = "topics"
-    include TitleWasOverride
-    alias_attribute :subject, :title
-  end
-
-  test "#alias_attribute with an overridden original method from a module issues a deprecation" do
-    message = <<~MESSAGE.gsub("\n", " ")
-      AttributeMethodsTest::ClassWithDeprecatedAliasAttributeBehaviorFromModule model aliases
-      `title` and has a method called `title_was` defined.
-      Starting in Rails 7.2 `subject_was` will not be calling `title_was` anymore.
-      You may want to additionally define `subject_was` to preserve the current behavior.
-    MESSAGE
-
-    obj = assert_deprecated(message, ActiveRecord.deprecator) do
-      ClassWithDeprecatedAliasAttributeBehaviorFromModule.new
+    class_with_deprecated_alias_attribute_behavior_from_module = Class.new(ActiveRecord::Base) do
+      self.table_name = "topics"
+      include title_was_override
+      alias_attribute :subject, :title
     end
+
+    obj = class_with_deprecated_alias_attribute_behavior_from_module.new
     obj.title = "hey"
     assert_equal("hey", obj.subject)
-    assert_equal("overridden_title_was", obj.subject_was)
+    assert_nil(obj.subject_was)
   end
 
   ClassWithDeprecatedAliasAttributeBehaviorResolved = Class.new(ActiveRecord::Base) do
@@ -1300,22 +1438,17 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     end
   end
 
-  class ChildWithDeprecatedBehaviorResolved < ClassWithDeprecatedAliasAttributeBehaviorResolved
-  end
-
-  test "#alias_attribute with an overridden original method along with an overridden alias method doesn't issue a deprecation" do
-    obj = assert_not_deprecated(ActiveRecord.deprecator) do
-      ClassWithDeprecatedAliasAttributeBehaviorResolved.new
-    end
+  test "#alias_attribute with an overridden original method along with an overridden alias method uses the overridden alias method" do
+    obj = ClassWithDeprecatedAliasAttributeBehaviorResolved.new
     obj.title = "hey"
     assert_equal("hey", obj.subject)
     assert_equal("overridden_subject_was", obj.subject_was)
   end
 
-  test "#alias_attribute with an overridden original method along with an overridden alias method in a parent class doesn't issue a deprecation" do
-    obj = assert_not_deprecated(ActiveRecord.deprecator) do
-      ChildWithDeprecatedBehaviorResolved.new
-    end
+  test "#alias_attribute with an overridden original method along with an overridden alias method in a parent class uses the overridden alias method" do
+    child_with_deprecated_behavior_resolved = Class.new(ClassWithDeprecatedAliasAttributeBehaviorResolved)
+
+    obj = child_with_deprecated_behavior_resolved.new
     obj.title = "hey"
     assert_equal("hey", obj.subject)
     assert_equal("overridden_subject_was", obj.subject_was)
@@ -1355,58 +1488,78 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     assert_equal 123_456, object.id_value
   end
 
-  ClassWithGeneratedAttributeMethodTarget = Class.new(ActiveRecord::Base) do
-    self.table_name = "topics"
-    alias_attribute :saved_title, :title_in_database
-  end
+  test "#alias_attribute with an _in_database method issues raises an error" do
+    class_with_generated_attribute_method_target = Class.new(ActiveRecord::Base) do
+      def self.name
+        "ClassWithGeneratedAttributeMethodTarget"
+      end
 
-  test "#alias_attribute with an _in_database method issues a deprecation warning" do
-    message = <<~MESSAGE.gsub("\n", " ")
-      AttributeMethodsTest::ClassWithGeneratedAttributeMethodTarget model aliases
+      self.table_name = "topics"
+
+      alias_attribute :saved_title, :title_in_database
+    end
+
+    message = <<~MESSAGE.squish
+      ClassWithGeneratedAttributeMethodTarget model aliases
       `title_in_database`, but `title_in_database` is not an attribute.
-      Starting in Rails 7.2, alias_attribute with non-attribute targets will raise.
       Use `alias_method :saved_title, :title_in_database` or define the method manually.
     MESSAGE
 
-    obj = assert_deprecated(message, ActiveRecord.deprecator) do
-      ClassWithGeneratedAttributeMethodTarget.new
+    error = assert_raises(ArgumentError) do
+      class_with_generated_attribute_method_target.new
     end
-    obj.title = "A river runs through it"
-    assert_nil obj.saved_title
-    obj.save
-    assert_equal "A river runs through it", obj.saved_title
+
+    assert_equal message, error.message
   end
 
-  ClassWithEnumMethodTarget = Class.new(ActiveRecord::Base) do
-    self.table_name = "books"
+  test "#alias_attribute with enum method raises an error" do
+    class_with_enum_method_target = Class.new(ActiveRecord::Base) do
+      def self.name
+        "ClassWithEnumMethodTarget"
+      end
 
-    attribute :status, :string
+      self.table_name = "books"
 
-    enum :status, {
-      pending: "0",
-      completed: "1",
-    }
-    alias_attribute :is_pending?, :pending?
-  end
+      attribute :status, :string
 
-  test "#alias_attribute with enum method issues a deprecation warning" do
-    message = <<~MESSAGE.gsub("\n", " ")
-    AttributeMethodsTest::ClassWithEnumMethodTarget model aliases `pending?`, but `pending?` is not an attribute. Starting in Rails 7.2, alias_attribute with non-attribute targets will raise. Use `alias_method :is_pending?, :pending?` or define the method manually.
+      enum :status, {
+        pending: "0",
+        completed: "1",
+      }
+      alias_attribute :is_pending?, :pending?
+    end
+
+    message = <<~MESSAGE.squish
+      ClassWithEnumMethodTarget model aliases `pending?`, but `pending?` is not an attribute. Use `alias_method :is_pending?, :pending?` or define the method manually.
     MESSAGE
 
-    obj = assert_deprecated(message, ActiveRecord.deprecator) do
-      ClassWithEnumMethodTarget.new
+    error = assert_raises(ArgumentError) do
+      class_with_enum_method_target.new
     end
-    obj.status = "pending"
-    assert_predicate obj, :pending?
-    assert_predicate obj, :is_pending?
+    assert_equal message, error.message
   end
 
-  ClassWithAssociationTarget = Class.new(ActiveRecord::Base) do
-    self.table_name = "books"
-    belongs_to :author
+  test "#alias_attribute with an association method raises an error" do
+    class_with_association_target = Class.new(ActiveRecord::Base) do
+      def self.name
+        "ClassWithAssociationTarget"
+      end
 
-    alias_attribute :written_by, :author
+      self.table_name = "books"
+
+      belongs_to :author
+
+      alias_attribute :written_by, :author
+    end
+
+    message = <<~MESSAGE.squish
+      ClassWithAssociationTarget model aliases `author`, but `author` is not an attribute. Use `alias_method :written_by, :author` or define the method manually.
+    MESSAGE
+
+    error = assert_raises(ArgumentError) do
+      class_with_association_target.new
+    end
+    assert_equal message, error.message
   end
 
   test "#alias_attribute method on a STI class is available on subclasses" do
@@ -1425,38 +1578,30 @@ class AttributeMethodsTest < ActiveRecord::TestCase
     assert_equal "Text", comment.text
   end
 
-  test "#alias_attribute with an association method issues a deprecation warning" do
-    message = <<~MESSAGE.gsub("\n", " ")
-    AttributeMethodsTest::ClassWithAssociationTarget model aliases `author`, but `author` is not an attribute. Starting in Rails 7.2, alias_attribute with non-attribute targets will raise. Use `alias_method :written_by, :author` or define the method manually.
-    MESSAGE
+  test "#alias_attribute with a manually defined method raises an error" do
+    class_with_aliased_manually_defined_method = Class.new(ActiveRecord::Base) do
+      def self.name
+        "ClassWithAliasedManuallyDefinedMethod"
+      end
 
-    obj = assert_deprecated(message, ActiveRecord.deprecator) do
-      ClassWithAssociationTarget.new
+      self.table_name = "books"
+
+      alias_attribute :print, :publish
+
+      def publish
+        "Publishing!"
+      end
     end
-    obj.author = Author.new(name: "Octavia E. Butler")
-    assert_equal "Octavia E. Butler", obj.written_by.name
-  end
 
-  ClassWithAliasedManuallyDefinedMethod = Class.new(ActiveRecord::Base) do
-    self.table_name = "books"
-    alias_attribute :print, :publish
-
-    def publish
-      "Publishing!"
-    end
-  end
-
-  test "#alias_attribute with a manually defined method issues a deprecation warning" do
-    message = <<~MESSAGE.gsub("\n", " ")
-      AttributeMethodsTest::ClassWithAliasedManuallyDefinedMethod model aliases `publish`,
-      but `publish` is not an attribute.
-      Starting in Rails 7.2, alias_attribute with non-attribute targets will raise.
+    message = <<~MESSAGE.squish
+      ClassWithAliasedManuallyDefinedMethod model aliases `publish`, but `publish` is not an attribute.
       Use `alias_method :print, :publish` or define the method manually.
     MESSAGE
 
-    assert_deprecated(message, ActiveRecord.deprecator) do
-      ClassWithAliasedManuallyDefinedMethod.new
+    error = assert_raises(ArgumentError) do
+      class_with_aliased_manually_defined_method.new
     end
+    assert_equal message, error.message
   end
 
   private
@@ -1485,5 +1630,12 @@ class AttributeMethodsTest < ActiveRecord::TestCase
           "I'm private"
         end
       private_method
+    end
+
+    def with_temporary_connection_pool(&block)
+      pool_config = ActiveRecord::Base.lease_connection.pool.pool_config
+      new_pool = ActiveRecord::ConnectionAdapters::ConnectionPool.new(pool_config)
+
+      pool_config.stub(:pool, new_pool, &block)
     end
 end

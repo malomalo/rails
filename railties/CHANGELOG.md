@@ -1,185 +1,99 @@
-*   Ensure logger tags configured with `config.log_tags` are still active in `request.action_dispatch` handlers
+*   Add RuboCop cache restoration to RuboCop job in GitHub Actions workflow templates.
 
-    *KJ Tsanaktsidis*
+    *Lovro Bikić*
 
-*   Setup jemalloc in the default Dockerfile for memory optimization.
+*   Skip generating mailer-related files in authentication generator if the application does
+    not use ActionMailer
 
-    *Matt Almeida*, *Jean Boussier*
+    *Rami Massoud*
 
-*   Commented out lines in .railsrc file should not be treated as arguments when using
-    rails new generator command. Update ARGVScrubber to ignore text after # symbols.
+*   Introduce `bin/ci` for running your tests, style checks, and security audits locally or in the cloud.
 
-    *Willian Tenfen*
-
-*   Skip CSS when generating APIs.
-
-    *Ruy Rocha*
-
-*   Rails console now indicates application name and the current Rails environment:
-
-    ```txt
-    my-app(dev)> # for RAILS_ENV=development
-    my-app(test)> # for RAILS_ENV=test
-    my-app(prod)> # for RAILS_ENV=production
-    my-app(my_env)> # for RAILS_ENV=my_env
-    ```
-
-    The application name is derived from the application's module name from `config/application.rb`.
-    For example, `MyApp` will displayed as `my-app` in the prompt.
-
-    Additionally, the environment name will be colorized when the environment is
-    `development` (blue), `test` (blue), or `production` (red), if your
-    terminal supports it.
-
-    *Stan Lo*
-
-*   Ensure `autoload_paths`, `autoload_once_paths`, `eager_load_paths`, and
-    `load_paths` only have directories when initialized from engine defaults.
-    Previously, files under the `app` directory could end up there too.
-
-    *Takumasa Ochi*
-
-*   Prevent unnecessary application reloads in development.
-
-    Previously, some files outside autoload paths triggered unnecessary reloads.
-    With this fix, application reloads according to `Rails.autoloaders.main.dirs`,
-    thereby preventing unnecessary reloads.
-
-    *Takumasa Ochi*
-
-*   Use `oven-sh/setup-bun` in GitHub CI when generating an app with Bun.
-
-    *TangRufus*
-
-*   Disable `pidfile` generation in the `production` environment.
-
-    *Hans Schnedlitz*
-
-*   Set `config.action_view.annotate_rendered_view_with_filenames` to `true` in
-    the `development` environment.
-
-    *Adrian Marin*
-
-*   Support the `BACKTRACE` environment variable to turn off backtrace cleaning.
-
-    Useful for debugging framework code:
-
-    ```sh
-    BACKTRACE=1 bin/rails server
-    ```
-
-    *Alex Ghiculescu*
-
-*   Raise `ArgumentError` when reading `config.x.something` with arguments:
+    The specific steps are defined by a new DSL in `config/ci.rb`.
 
     ```ruby
-    config.x.this_works.this_raises true # raises ArgumentError
+    ActiveSupport::ContinuousIntegration.run do
+      step "Setup", "bin/setup --skip-server"
+      step "Style: Ruby", "bin/rubocop"
+      step "Security: Gem audit", "bin/bundler-audit"
+      step "Tests: Rails", "bin/rails test test:system"
+    end
     ```
 
-    *Sean Doyle*
+    Optionally use [gh-signoff](https://github.com/basecamp/gh-signoff) to
+    set a green PR status - ready for merge.
 
-*   Add default PWA files for manifest and service-worker that are served from `app/views/pwa` and can be dynamically rendered through ERB. Mount these files explicitly at the root with default routes in the generated routes file.
+    *Jeremy Daer*, *DHH*
+
+*   Generate session controller tests when running the authentication generator.
+
+    *Jerome Dalbert*
+
+*   Add bin/bundler-audit and config/bundler-audit.yml for discovering and managing known security problems with app gems.
 
     *DHH*
 
-*   Updated system tests to now use headless Chrome by default for the new applications.
+*   Rails no longer generates a `bin/bundle` binstub when creating new applications.
 
-    *DHH*
+    The `bin/bundle` binstub used to help activate the right version of bundler.
+    This is no longer necessary as this mechanism is now part of Rubygem itself.
 
-*   Add GitHub CI files for Dependabot, Brakeman, RuboCop, and running tests by default. Can be skipped with `--skip-ci`.
+    *Edouard Chin*
 
-    *DHH*
+*   Add a `SessionTestHelper` module with `sign_in_as(user)` and `sign_out` test helpers when
+    running `rails g authentication`. Simplifies authentication in integration tests.
 
-*   Add Brakeman by default for static analysis of security vulnerabilities. Allow skipping with `--skip-brakeman option`.
+    *Bijan Rahnema*
 
-    *vipulnsward*
+*   Rate limit password resets in authentication generator
 
-*   Add RuboCop with rules from `rubocop-rails-omakase` by default. Skip with `--skip-rubocop`.
+    This helps mitigate abuse from attackers spamming the password reset form.
 
-    *DHH* and *zzak*
+    *Chris Oliver*
 
-*   Use `bin/rails runner --skip-executor` to not wrap the runner script with an
-    Executor.
+*   Update `rails new --minimal` option
 
-    *Ben Sheldon*
+    Extend the `--minimal` flag to exclude recently added features:
+    `skip_brakeman`, `skip_ci`, `skip_docker`, `skip_kamal`, `skip_rubocop`, `skip_solid` and `skip_thruster`.
 
-*   Fix isolated engines to take `ActiveRecord::Base.table_name_prefix` into consideration.
-    This will allow for engine defined models, such as inside Active Storage, to respect
-    Active Record table name prefix configuration.
+    *eelcoj*
 
-    *Chedli Bourguiba*
+*   Add `application-name` metadata to application layout
 
-*   Fix running `db:system:change` when the app has no Dockerfile.
+    The following metatag will be added to `app/views/layouts/application.html.erb`
 
-    *Hartley McGuire*
-
-*   In Action Mailer previews, list inline attachments separately from normal
-    attachments. For example, attachments that were previously listed like
-
-      > Attachments: logo.png file1.pdf file2.pdf
-
-    will now be listed like
-
-      > Attachments: file1.pdf file2.pdf (Inline: logo.png)
-
-    *Christian Schmidt* and *Jonathan Hefner*
-
-*   In mailer preview, only show SMTP-To if it differs from the union of To, Cc and Bcc.
-
-    *Christian Schmidt*
-
-*   Enable YJIT by default on new applications running Ruby 3.3+.
-
-    Adds a `config/initializers/enable_yjit.rb` initializer that enables YJIT
-    when running on Ruby 3.3+.
-
-    *Jean Boussier*
-
-*   In Action Mailer previews, show date from message `Date` header if present.
-
-    *Sampat Badhe*
-
-*   Exit with non-zero status when the migration generator fails.
-
-    *Katsuhiko YOSHIDA*
-
-*   Use numeric UID and GID in Dockerfile template
-
-    The Dockerfile generated by `rails new` sets the default user and group
-    by name instead of UID:GID. This can cause the following error in Kubernetes:
-
-    ```
-    container has runAsNonRoot and image has non-numeric user (rails), cannot verify user is non-root
-    ```
-
-    This change sets default user and group by their numeric values.
-
-    *Ivan Fedotov*
-
-*   Disallow invalid values for rails new options.
-
-    The `--database`, `--asset-pipeline`, `--css`, and `--javascript` options
-    for `rails new` take different arguments. This change validates them.
-
-    *Tony Drake*, *Akhil G Krishnan*, *Petrik de Heus*
-
-*   Conditionally print `$stdout` when invoking `run_generator`.
-
-    In an effort to improve the developer experience when debugging
-    generator tests, we add the ability to conditionally print `$stdout`
-    instead of capturing it.
-
-    This allows for calls to `binding.irb` and `puts` work as expected.
-
-    ```sh
-    RAILS_LOG_TO_STDOUT=true ./bin/test test/generators/actions_test.rb
+    ```html
+    <meta name="application-name" content="Name of Rails Application">
     ```
 
     *Steve Polito*
 
-*   Remove the option `config.public_file_server.enabled` from the generators
-    for all environments, as the value is the same in all environments.
+*   Use `secret_key_base` from ENV or credentials when present locally.
 
-    *Adrian Hirt*
+    When ENV["SECRET_KEY_BASE"] or
+    `Rails.application.credentials.secret_key_base` is set for test or
+    development, it is used for the `Rails.config.secret_key_base`,
+    instead of generating a `tmp/local_secret.txt` file.
 
-Please check [7-1-stable](https://github.com/rails/rails/blob/7-1-stable/railties/CHANGELOG.md) for previous changes.
+    *Petrik de Heus*
+
+*   Introduce `RAILS_MASTER_KEY` placeholder in generated ci.yml files
+
+    *Steve Polito*
+
+*   Colorize the Rails console prompt even on non standard environments.
+
+    *Lorenzo Zabot*
+
+*   Don't enable YJIT in development and test environments
+
+    Development and test environments tend to reload code and redefine methods (e.g. mocking),
+    hence YJIT isn't generally faster in these environments.
+
+    *Ali Ismayilov*, *Jean Boussier*
+
+*   Only include PermissionsPolicy::Middleware if policy is configured.
+
+    *Petrik de Heus*
+
+Please check [8-0-stable](https://github.com/rails/rails/blob/8-0-stable/railties/CHANGELOG.md) for previous changes.

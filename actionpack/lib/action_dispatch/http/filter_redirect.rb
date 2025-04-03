@@ -11,7 +11,7 @@ module ActionDispatch
         if location_filter_match?
           FILTERED
         else
-          location
+          parameter_filtered_location
         end
       end
 
@@ -32,6 +32,25 @@ module ActionDispatch
             location.match?(filter)
           end
         end
+      end
+
+      def parameter_filtered_location
+        uri = URI.parse(location)
+        unless uri.query.nil? || uri.query.empty?
+          parts = uri.query.split(/([&;])/)
+          filtered_parts = parts.map do |part|
+            if part.include?("=")
+              key, value = part.split("=", 2)
+              request.parameter_filter.filter(key => value).first.join("=")
+            else
+              part
+            end
+          end
+          uri.query = filtered_parts.join("")
+        end
+        uri.to_s
+      rescue URI::Error
+        FILTERED
       end
     end
   end

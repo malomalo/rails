@@ -3,10 +3,9 @@
 require "pathname"
 
 require "active_support"
+require "active_support/rails"
 require "active_support/core_ext/kernel/reporting"
-require "active_support/core_ext/module/delegation"
 require "active_support/core_ext/array/extract_options"
-require "active_support/core_ext/object/blank"
 
 require "rails/version"
 require "rails/deprecator"
@@ -71,6 +70,7 @@ module Rails
     #   Rails.env # => "development"
     #   Rails.env.development? # => true
     #   Rails.env.production? # => false
+    #   Rails.env.local? # => true              true for "development" and "test", false for anything else
     def env
       @_env ||= ActiveSupport::EnvironmentInquirer.new(ENV["RAILS_ENV"].presence || ENV["RACK_ENV"].presence || "development")
     end

@@ -1,6 +1,5 @@
-*   Fix all Action Mailbox database related models to respect
-    `ActiveRecord::Base.table_name_prefix` configuration.
+*   Add `reply_to_address` extension method on `Mail::Message`.
 
-    *Chedli Bourguiba*
+    *Mr0grog*
 
-Please check [7-1-stable](https://github.com/rails/rails/blob/7-1-stable/actionmailbox/CHANGELOG.md) for previous changes.
+Please check [8-0-stable](https://github.com/rails/rails/blob/8-0-stable/actionmailbox/CHANGELOG.md) for previous changes.

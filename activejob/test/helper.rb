@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "active_support/testing/strict_warnings"
+require_relative "../../tools/strict_warnings"
 require "active_job"
 require "support/job_buffer"
 
@@ -23,3 +23,5 @@ def adapter_is?(*adapter_class_symbols)
 end
 
 require_relative "../../tools/test_common"
+
+ActiveJob::Base.include(ActiveJob::EnqueueAfterTransactionCommit)

@@ -107,6 +107,7 @@ module ActionDispatch
             "#{absolute_path}.html"
           end
 
+          # rubocop:disable Lint/Debugger
           def save_html
             page.save_page(absolute_html_path)
           end
@@ -114,6 +115,7 @@ module ActionDispatch
           def save_image
             page.save_screenshot(absolute_image_path)
           end
+          # rubocop:enable Lint/Debugger
 
           def output_type
             # Environment variables have priority
@@ -130,8 +132,8 @@ module ActionDispatch
           end
 
           def display_image(html:, screenshot_output:)
-            message = +"[Screenshot Image]: #{image_path}\n"
-            message << +"[Screenshot HTML]: #{html_path}\n" if html
+            message = +"[Screenshot Image]: #{image_path} \n"
+            message << +"[Screenshot HTML]: #{html_path} \n" if html
 
             case screenshot_output || output_type
             when "artifact"

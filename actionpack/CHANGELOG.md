@@ -1,89 +1,139 @@
-*   Add `allow_browser` to set minimum browser versions for the application.
+*   Include cookie name when calculating maximum allowed size.
 
-    A browser that's blocked will by default be served the file in `public/426.html` with a HTTP status code of "426 Upgrade Required".
+    *Hartley McGuire*
+
+*   Implement `must-understand` directive according to RFC 9111.
+
+    The `must-understand` directive indicates that a cache must understand the semantics of the response status code, or discard the response. This directive is enforced to be used only with `no-store` to ensure proper cache behavior.
 
     ```ruby
-    class ApplicationController < ActionController::Base
-      # Allow only browsers natively supporting webp images, web push, badges, import maps, CSS nesting + :has
-      allow_browser versions: :modern
-    end
+    class ArticlesController < ApplicationController
+      def show
+        @article = Article.find(params[:id])
 
-    class ApplicationController < ActionController::Base
-      # All versions of Chrome and Opera will be allowed, but no versions of "internet explorer" (ie). Safari needs to be 16.4+ and Firefox 121+.
-      allow_browser versions: { safari: 16.4, firefox: 121, ie: false }
-    end
-
-    class MessagesController < ApplicationController
-      # In addition to the browsers blocked by ApplicationController, also block Opera below 104 and Chrome below 119 for the show action.
-      allow_browser versions: { opera: 104, chrome: 119 }, only: :show
+        if @article.special_format?
+          must_understand
+          render status: 203 # Non-Authoritative Information
+        else
+          fresh_when @article
+        end
+      end
     end
     ```
 
-    *DHH*
+    *heka1024*
 
-*   Add rate limiting API.
+*   The JSON renderer doesn't escape HTML entities or Unicode line separators anymore.
+
+    Using `render json:` will no longer escape `<`, `>`, `&`, `U+2028` and `U+2029` characters that can cause errors
+    when the resulting JSON is embedded in JavaScript, or vulnerabilities when the resulting JSON is embedded in HTML.
+
+    Since the renderer is used to return a JSON document as `application/json`, it's typically not necessary to escape
+    those characters, and it improves performance.
+
+    Escaping will still occur when the `:callback` option is set, since the JSON is used as JavaScript code in this
+    situation (JSONP).
+
+    You can use the `:escape` option or set `config.action_controller.escape_json_responses` to `true` to restore the
+    escaping behavior.
 
     ```ruby
-    class SessionsController < ApplicationController
-      rate_limit to: 10, within: 3.minutes, only: :create
-    end
-
-    class SignupsController < ApplicationController
-      rate_limit to: 1000, within: 10.seconds,
-        by: -> { request.domain }, with: -> { redirect_to busy_controller_url, alert: "Too many signups!" }, only: :new
+    class PostsController < ApplicationController
+      def index
+        render json: Post.last(30), escape: true
+      end
     end
     ```
 
-    *DHH*, *Jean Boussier*
+    *Étienne Barrié*, *Jean Boussier*
 
-*   Add `image/svg+xml` to the compressible content types of ActionDispatch::Static
+*   Load lazy route sets before inserting test routes
 
-    *Georg Ledermann*
-
-*   Add instrumentation for ActionController::Live#send_stream
-
-    Allows subscribing to `send_stream` events. The event payload contains the filename, disposition, and type.
-
-    *Hannah Ramadan*
-
-*   Add support for `with_routing` test helper in `ActionDispatch::IntegrationTest`
+    Without loading lazy route sets early, we miss `after_routes_loaded` callbacks, or risk
+    invoking them with the test routes instead of the real ones if another load is triggered by an engine.
 
     *Gannon McGibbon*
 
-*   Remove deprecated support to set `Rails.application.config.action_dispatch.show_exceptions` to `true` and `false`.
+*   Raise `AbstractController::DoubleRenderError` if `head` is called after rendering.
 
-    *Rafael Mendonça França*
+    After this change, invoking `head` will lead to an error if response body is already set:
 
-*   Remove deprecated `speaker`, `vibrate`, and `vr` permissions policy directives.
+    ```ruby
+    class PostController < ApplicationController
+      def index
+        render locals: {}
+        head :ok
+      end
+    end
+    ```
 
-    *Rafael Mendonça França*
+    *Iaroslav Kurbatov*
 
-*   Remove deprecated `Rails.application.config.action_dispatch.return_only_request_media_type_on_content_type`.
+*   The Cookie Serializer can now serialize an Active Support SafeBuffer when using message pack.
 
-    *Rafael Mendonça França*
+    Such code would previously produce an error if an application was using messagepack as its cookie serializer.
 
-*   Deprecate `Rails.application.config.action_controller.allow_deprecated_parameters_hash_equality`.
+    ```ruby
+    class PostController < ApplicationController
+      def index
+        flash.notice = t(:hello_html) # This would try to serialize a SafeBuffer, which was not possible.
+      end
+    end
+    ```
 
-    *Rafael Mendonça França*
+    *Edouard Chin*
 
-*   Remove deprecated comparison between `ActionController::Parameters` and `Hash`.
+*   Fix `Rails.application.reload_routes!` from clearing almost all routes.
 
-    *Rafael Mendonça França*
+    When calling `Rails.application.reload_routes!` inside a middleware of
+    a Rake task, it was possible under certain conditions that all routes would be cleared.
+    If ran inside a middleware, this would result in getting a 404 on most page you visit.
+    This issue was only happening in development.
 
-*   Remove deprecated constant `AbstractController::Helpers::MissingHelperError`.
+    *Edouard Chin*
 
-    *Rafael Mendonça França*
+*   Add resource name to the `ArgumentError` that's raised when invalid `:only` or `:except` options are given to `#resource` or `#resources`
 
-*   Fix a race condition that could cause a `Text file busy - chromedriver`
-    error with parallel system tests
+    This makes it easier to locate the source of the problem, especially for routes drawn by gems.
 
-    *Matt Brictson*
+    Before:
+    ```
+    :only and :except must include only [:index, :create, :new, :show, :update, :destroy, :edit], but also included [:foo, :bar]
+    ```
 
-*   Add `racc` as a dependency since it will become a bundled gem in Ruby 3.4.0
+    After:
+    ```
+    Route `resources :products` - :only and :except must include only [:index, :create, :new, :show, :update, :destroy, :edit], but also included [:foo, :bar]
+    ```
 
-    *Hartley McGuire*
-*   Remove deprecated constant `ActionDispatch::IllegalStateError`.
+    *Jeremy Green*
 
-    *Rafael Mendonça França*
+*   Add `check_collisions` option to `ActionDispatch::Session::CacheStore`.
 
-Please check [7-1-stable](https://github.com/rails/rails/blob/7-1-stable/actionpack/CHANGELOG.md) for previous changes.
+    Newly generated session ids use 128 bits of randomness, which is more than
+    enough to ensure collisions can't happen, but if you need to harden sessions
+    even more, you can enable this option to check in the session store that the id
+    is indeed free you can enable that option. This however incurs an extra write
+    on session creation.
+
+    *Shia*
+
+*   In ExceptionWrapper, match backtrace lines with built templates more often,
+    allowing improved highlighting of errors within do-end blocks in templates.
+    Fix for Ruby 3.4 to match new method labels in backtrace.
+
+    *Martin Emde*
+
+*   Allow setting content type with a symbol of the Mime type.
+
+    ```ruby
+    # Before
+    response.content_type = "text/html"
+
+    # After
+    response.content_type = :html
+    ```
+
+    *Petrik de Heus*
+
+Please check [8-0-stable](https://github.com/rails/rails/blob/8-0-stable/actionpack/CHANGELOG.md) for previous changes.

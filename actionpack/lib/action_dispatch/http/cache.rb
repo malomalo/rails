@@ -9,6 +9,8 @@ module ActionDispatch
         HTTP_IF_MODIFIED_SINCE = "HTTP_IF_MODIFIED_SINCE"
         HTTP_IF_NONE_MATCH     = "HTTP_IF_NONE_MATCH"
 
+        mattr_accessor :strict_freshness, default: false
+
         def if_modified_since
           if since = get_header(HTTP_IF_MODIFIED_SINCE)
             Time.rfc2822(since) rescue nil
@@ -34,19 +36,32 @@ module ActionDispatch
           end
         end
 
-        # Check response freshness (`Last-Modified` and ETag) against request
-        # `If-Modified-Since` and `If-None-Match` conditions. If both headers are
-        # supplied, both must match, or the request is not considered fresh.
+        # Check response freshness (`Last-Modified` and `ETag`) against request
+        # `If-Modified-Since` and `If-None-Match` conditions.
+        # If both headers are supplied, based on configuration, either `ETag` is preferred over `Last-Modified`
+        # or both are considered equally. You can adjust the preference with
+        # `config.action_dispatch.strict_freshness`.
+        # Reference: http://tools.ietf.org/html/rfc7232#section-6
         def fresh?(response)
-          last_modified = if_modified_since
-          etag          = if_none_match
+          if Request.strict_freshness
+            if if_none_match
+              etag_matches?(response.etag)
+            elsif if_modified_since
+              not_modified?(response.last_modified)
+            else
+              false
+            end
+          else
+            last_modified = if_modified_since
+            etag          = if_none_match
 
-          return false unless last_modified || etag
+            return false unless last_modified || etag
 
-          success = true
-          success &&= not_modified?(response.last_modified) if last_modified
-          success &&= etag_matches?(response.etag) if etag
-          success
+            success = true
+            success &&= not_modified?(response.last_modified) if last_modified
+            success &&= etag_matches?(response.etag) if etag
+            success
+          end
         end
       end
 
@@ -127,7 +142,7 @@ module ActionDispatch
       private
         DATE          = "Date"
         LAST_MODIFIED = "Last-Modified"
-        SPECIAL_KEYS  = Set.new(%w[extras no-store no-cache max-age public private must-revalidate])
+        SPECIAL_KEYS  = Set.new(%w[extras no-store no-cache max-age public private must-revalidate must-understand])
 
         def generate_weak_etag(validators)
           "W/#{generate_strong_etag(validators)}"
@@ -171,6 +186,8 @@ module ActionDispatch
         PUBLIC                = "public"
         PRIVATE               = "private"
         MUST_REVALIDATE       = "must-revalidate"
+        IMMUTABLE             = "immutable"
+        MUST_UNDERSTAND       = "must-understand"
 
         def handle_conditional_get!
           # Normally default cache control setting is handled by ETag middleware. But, if
@@ -205,6 +222,7 @@ module ActionDispatch
 
           if control[:no_store]
             options << PRIVATE if control[:private]
+            options << MUST_UNDERSTAND if control[:must_understand]
             options << NO_STORE
           elsif control[:no_cache]
             options << PUBLIC if control[:public]
@@ -221,6 +239,7 @@ module ActionDispatch
             options << MUST_REVALIDATE if control[:must_revalidate]
             options << "stale-while-revalidate=#{stale_while_revalidate.to_i}" if stale_while_revalidate
             options << "stale-if-error=#{stale_if_error.to_i}" if stale_if_error
+            options << IMMUTABLE if control[:immutable]
             options.concat(extras) if extras
           end
 
