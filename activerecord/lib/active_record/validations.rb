@@ -119,7 +119,7 @@ module ActiveRecord
     end
 
     def perform_validations(options = {})
-      options[:validate] == false || valid?(options[:context])
+      options[:validate] == false || valid?(options[:context], options[:memory])
     end
   end
 end

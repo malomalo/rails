@@ -156,6 +156,25 @@ module ActiveRecord
 
     module ClassMethods # :nodoc:
       private
+        def define_non_cyclic_method(name, &block)
+          return if method_defined?(name, false)
+
+          define_method(name) do |*args|
+            result = true; @_already_called ||= {}
+            # Loop prevention for validation of associations
+            unless @_already_called[name]
+              begin
+                @_already_called[name] = true
+                result = instance_eval(&block)
+              ensure
+                @_already_called[name] = false
+              end
+            end
+
+            result
+          end
+        end
+
         # Adds validation and save callbacks for the association as specified by
         # the +reflection+.
         #
@@ -173,12 +192,12 @@ module ActiveRecord
           if reflection.collection?
             around_save :around_save_collection_association
 
-            define_method(save_method) { save_collection_association(reflection) }
+            define_non_cyclic_method(save_method) { save_collection_association(reflection) }
             # Doesn't use after_save as that would save associations added in after_create/after_update twice
             after_create save_method
             after_update save_method
           elsif reflection.has_one?
-            define_method(save_method) { save_has_one_association(reflection) }
+            define_non_cyclic_method(save_method) { save_has_one_association(reflection) }
             # Configures two callbacks instead of a single after_save so that
             # the model may rely on their execution order relative to its
             # own callbacks.
@@ -190,7 +209,7 @@ module ActiveRecord
             after_create save_method
             after_update save_method
           else
-            define_method(save_method) { throw(:abort) if save_belongs_to_association(reflection) == false }
+            define_non_cyclic_method(save_method) { throw(:abort) if save_belongs_to_association(reflection) == false }
             before_save save_method
           end
 
@@ -208,7 +227,7 @@ module ActiveRecord
               method = :validate_belongs_to_association
             end
 
-            define_method(validation_method) { send(method, reflection) }
+            define_non_cyclic_method(validation_method) { send(method, reflection) }
             validate validation_method
             after_validation :_ensure_no_duplicate_errors
           end
@@ -264,6 +283,7 @@ module ActiveRecord
       end
     end
 
+    #TODO: can go I think
     def validating_belongs_to_for?(association)
       @validating_belongs_to_for ||= {}
       @validating_belongs_to_for[association]
@@ -323,7 +343,7 @@ module ActiveRecord
         return if inverse_association && (record.validating_belongs_to_for?(inverse_association) ||
           record.autosaving_belongs_to_for?(inverse_association))
 
-        association_valid?(reflection, record, @memory)
+        association_valid?(association, record, @memory)
       end
 
       # Validate the association if <tt>:validate</tt> or <tt>:autosave</tt> is
@@ -356,48 +376,19 @@ module ActiveRecord
       # Returns whether or not the association is valid and applies any errors to
       # the parent, <tt>self</tt>, if it wasn't. Skips any <tt>:autosave</tt>
       # enabled records if they're marked_for_destruction? or destroyed.
-      def association_valid?(reflection, record, memory)
+      def association_valid?(association, record, memory)
         return true if record.destroyed? || (association.options[:autosave] && record.marked_for_destruction?)
 
         context = validation_context if custom_validation_context?
 
-        if memory.has_key?("valid#{record.object_id}")
-          return memory["valid#{record.object_id}"]
-        else
-          memory["valid#{record.object_id}"] = true
-          
-          valid = record.valid?(context, memory)
-          if !valid
-            if record.changed? || record.new_record? || context
-              associated_errors = record.errors.objects
-            else
-              # If there are existing invalid records in the DB, we should still be able to reference them.
-              # Unless a record (no matter where in the association chain) is invalid and is being changed.
-              associated_errors = record.errors.objects.select { |error| error.is_a?(Associations::NestedError) }
-            end
+        return memory["valid#{record.object_id}"] if memory.has_key?("valid#{record.object_id}")
 
-            if association.options[:autosave]
-              return if equal?(record)
-              
-              associated_errors.each { |error|
-                errors.objects.append(
-                  Associations::NestedError.new(association, error)
-                )
-              }
-            elsif associated_errors.any?
-              errors.add(association.reflection.name)
-            end
-            
-            valid = errors.any?
-          end
-          memory["valid#{record.object_id}"] = valid
-          valid
-        end
-      end
+        memory["valid#{record.object_id}"] = true
+        
+        return true if record.valid?(context, memory)
 
-      def normalize_reflection_attribute(indexed_attribute, reflection, index, attribute)
-        if indexed_attribute
-          "#{reflection.name}[#{index}].#{attribute}"
+        if record.changed? || record.new_record? || context
+          associated_errors = record.errors.objects
         else
           # If there are existing invalid records in the DB, we should still be able to reference them.
           # Unless a record (no matter where in the association chain) is invalid and is being changed.
@@ -416,7 +407,7 @@ module ActiveRecord
           errors.add(association.reflection.name)
         end
 
-        errors.any?
+        memory["valid#{record.object_id}"] = errors.any?
       end
 
       # Is used as an around_save callback to check while saving a collection
@@ -531,7 +522,7 @@ module ActiveRecord
           saved = if @memory.has_key?("saved#{record.object_id}")
             @memory["saved#{record.object_id}"]
           else
-            record.save(validate: !autosave, memory: @memory)
+            @memory["saved#{record.object_id}"] = record.save(validate: !autosave, memory: @memory)
           end
           raise ActiveRecord::Rollback if !saved && autosave
           saved
@@ -584,7 +575,7 @@ module ActiveRecord
               begin
                 @autosaving_belongs_to_for ||= {}
                 @autosaving_belongs_to_for[association] = true
-                record.save(validate: !autosave, memory: @memory)
+                @memory["saved#{record.object_id}"] = record.save(validate: !autosave, memory: @memory)
               ensure
                 @autosaving_belongs_to_for[association] = false
               end
