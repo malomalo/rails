@@ -135,10 +135,14 @@ module ActiveRecord
 
         def extract_attribute(node)
           attr_node = nil
-          Arel.fetch_attribute(node) do |attr|
-            return if attr_node&.!= attr # all attr nodes should be the same
+
+          valid_attrs = Arel.fetch_attribute(node) do |attr|
+            !attr_node || attr_node == attr # all attr nodes should be the same
+          ensure
             attr_node = attr
           end
+          return unless valid_attrs # all nested nodes should yield an attribute
+
           attr_node
         end
 
@@ -188,7 +192,7 @@ module ActiveRecord
           non_empty_predicates.map do |node|
             case node
             when Arel::Nodes::SqlLiteral, ::String
-              wrap_sql_literal(node)
+              Arel::Nodes::Grouping.new(node)
             else node
             end
           end
@@ -197,13 +201,6 @@ module ActiveRecord
         ARRAY_WITH_EMPTY_STRING = [""]
         def non_empty_predicates
           predicates - ARRAY_WITH_EMPTY_STRING
-        end
-
-        def wrap_sql_literal(node)
-          if ::String === node
-            node = Arel.sql(node)
-          end
-          Arel::Nodes::Grouping.new(node)
         end
 
         def extract_node_value(node)

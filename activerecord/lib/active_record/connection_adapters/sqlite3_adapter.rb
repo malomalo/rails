@@ -41,7 +41,7 @@ module ActiveRecord
     #
     # There may be other options available specific to the SQLite3 driver. Please read the
     # documentation for
-    # {SQLite::Database.new}[https://sparklemotion.github.io/sqlite3-ruby/SQLite3/Database.html#method-c-new]
+    # {SQLite3::Database.new}[https://sparklemotion.github.io/sqlite3-ruby/SQLite3/Database.html#method-c-new]
     #
     class SQLite3Adapter < AbstractAdapter
       ADAPTER_NAME = "SQLite"
@@ -65,6 +65,10 @@ module ActiveRecord
           args << File.expand_path(config.database, defined?(Rails.root) ? Rails.root : nil)
 
           find_cmd_and_exec(ActiveRecord.database_cli[:sqlite], *args)
+        end
+
+        def native_database_types # :nodoc:
+          NATIVE_DATABASE_TYPES
         end
       end
 
@@ -145,7 +149,6 @@ module ActiveRecord
           end
         end
 
-        @last_affected_rows = nil
         @previous_read_uncommitted = nil
         @config[:strict] = ConnectionAdapters::SQLite3Adapter.strict_strings_by_default unless @config.key?(:strict)
 
@@ -182,7 +185,7 @@ module ActiveRecord
       end
 
       def supports_expression_index?
-        database_version >= "3.9.0"
+        true
       end
 
       def requires_reloading?
@@ -210,7 +213,7 @@ module ActiveRecord
       end
 
       def supports_common_table_expressions?
-        database_version >= "3.8.3"
+        true
       end
 
       def supports_insert_returning?
@@ -256,10 +259,6 @@ module ActiveRecord
 
       def supports_index_sort_order?
         true
-      end
-
-      def native_database_types # :nodoc:
-        NATIVE_DATABASE_TYPES
       end
 
       # Returns the current database encoding format as a string, e.g. 'UTF-8'
@@ -338,7 +337,7 @@ module ActiveRecord
       # Creates a virtual table
       #
       # Example:
-      #   create_virtual_table :emails, :fts5, ['sender', 'title',' body']
+      #   create_virtual_table :emails, :fts5, ['sender', 'title', 'body']
       def create_virtual_table(table_name, module_name, values)
         exec_query "CREATE VIRTUAL TABLE IF NOT EXISTS #{table_name} USING #{module_name} (#{values.join(", ")})"
       end
@@ -507,8 +506,8 @@ module ActiveRecord
       end
 
       def check_version # :nodoc:
-        if database_version < "3.8.0"
-          raise "Your version of SQLite (#{database_version}) is too old. Active Record supports SQLite >= 3.8."
+        if database_version < "3.23.0"
+          raise "Your version of SQLite (#{database_version}) is too old. Active Record supports SQLite >= 3.23.0."
         end
       end
 
@@ -564,6 +563,8 @@ module ActiveRecord
           # Binary columns
           when /x'(.*)'/
             [ $1 ].pack("H*")
+          when "TRUE", "FALSE"
+            default
           else
             # Anything else is blank or some function
             # and we can't know the value of that, so return nil.

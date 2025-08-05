@@ -48,11 +48,13 @@ module ActiveRecord
     def test_valid_column
       @connection.native_database_types.each_key do |type|
         assert @connection.valid_type?(type)
+        assert @connection.class.valid_type?(type)
       end
     end
 
     def test_invalid_column
       assert_not @connection.valid_type?(:foobar)
+      assert_not @connection.class.valid_type?(:foobar)
     end
 
     def test_tables
@@ -149,6 +151,23 @@ module ActiveRecord
       assert_instance_of(ActiveRecord::Result, result)
       assert_empty result.rows
       assert_not_empty result.columns
+    end
+
+    test "#exec_query queries return an ActiveRecord::Result with affected rows" do
+      result = @connection.exec_query "INSERT INTO subscribers(nick, name) VALUES('me', 'me'), ('you', 'you')"
+      assert_equal 2, result.affected_rows
+
+      update_result = @connection.exec_query "UPDATE subscribers SET name = 'you' WHERE name = 'me'"
+      assert_equal 1, update_result.affected_rows
+
+      select_result = @connection.exec_query "SELECT * FROM subscribers"
+      assert_not_equal update_result.affected_rows, select_result.affected_rows
+
+      result = @connection.exec_query "DELETE FROM subscribers WHERE name = 'you'"
+      assert_equal 2, result.affected_rows
+
+      result = @connection.exec_query "DELETE FROM subscribers WHERE name = 'you'"
+      assert_equal 0, result.affected_rows
     end
 
     if current_adapter?(:Mysql2Adapter, :TrilogyAdapter)
@@ -704,6 +723,7 @@ module ActiveRecord
         notifications = capture_notifications("sql.active_record") do
           assert (a = Author.first)
           assert Post.where(id: [1, 2]).first
+          assert Post.where(Arel.sql("id IN (1,2)", retryable: true)).first
           assert Post.find(1)
           assert Post.find_by(title: "Welcome to the weblog")
           assert_predicate Post, :exists?
@@ -712,7 +732,7 @@ module ActiveRecord
           Author.group(:name).count
         end.select { |n| n.payload[:name] != "SCHEMA" }
 
-        assert_equal 8, notifications.length
+        assert_equal 9, notifications.length
 
         notifications.each do |n|
           assert n.payload[:allow_retry], "#{n.payload[:sql]} was not retryable"
@@ -725,6 +745,7 @@ module ActiveRecord
         notifications = capture_notifications("sql.active_record") do
           assert_not_nil (a = Author.first)
           assert_not_nil Post.where(id: [1, 2]).first
+          assert Post.where(Arel.sql("id IN (1,2)", retryable: true)).first
           assert_not_nil Post.find(1)
           assert_not_nil Post.find_by(title: "Welcome to the weblog")
           assert_predicate Post, :exists?
@@ -733,7 +754,7 @@ module ActiveRecord
           Author.group(:name).count
         end.select { |n| n.payload[:name] != "SCHEMA" }
 
-        assert_equal 8, notifications.length
+        assert_equal 9, notifications.length
 
         notifications.each do |n|
           assert n.payload[:allow_retry], "#{n.payload[:sql]} was not retryable"
@@ -861,20 +882,13 @@ module ActiveRecord
       end
 
       test "#execute is retryable" do
-        conn_id = case @connection.adapter_name
-                  when "Mysql2"
-                    @connection.execute("SELECT CONNECTION_ID()").to_a[0][0]
-                  when "Trilogy"
-                    @connection.execute("SELECT CONNECTION_ID() as connection_id").to_a[0][0]
-                  when "PostgreSQL"
-                    @connection.execute("SELECT pg_backend_pid()").to_a[0]["pg_backend_pid"]
-                  else
-                    skip("kill_connection_from_server unsupported")
-        end
+        initial_connection_id = connection_id_from_server
 
-        kill_connection_from_server(conn_id)
+        kill_connection_from_server(initial_connection_id)
 
         @connection.execute("SELECT 1", allow_retry: true)
+
+        assert_not_equal initial_connection_id, connection_id_from_server
       end
 
       test "disconnect and recover on #configure_connection failure" do
@@ -943,7 +957,7 @@ module ActiveRecord
               true
             end
           else
-            skip("kill_connection_from_server unsupported")
+            skip("raw_transaction_open? unsupported")
           end
         end
 
@@ -965,13 +979,24 @@ module ActiveRecord
           end
         end
 
+        def connection_id_from_server
+          case @connection.adapter_name
+          when "Mysql2", "Trilogy"
+            @connection.execute("SELECT CONNECTION_ID()").to_a[0][0]
+          when "PostgreSQL"
+            @connection.execute("SELECT pg_backend_pid()").to_a[0]["pg_backend_pid"]
+          else
+            skip("connection_id_from_server unsupported")
+          end
+        end
+
         def kill_connection_from_server(connection_id)
           conn = @connection.pool.checkout
           case conn.adapter_name
           when "Mysql2", "Trilogy"
             conn.execute("KILL #{connection_id}")
           when "PostgreSQL"
-            conn.execute("SELECT pg_cancel_backend(#{connection_id})")
+            conn.execute("SELECT pg_terminate_backend(#{connection_id})")
           else
             skip("kill_connection_from_server unsupported")
           end

@@ -11,6 +11,337 @@
     of Active Record models, when an application is eager loaded. As a result, encrypted attributes
     could be misconfigured in some cases.
 
+*   Add `connection.current_transaction.isolation` API to check current transaction's isolation level.
+
+    Returns the isolation level if it was explicitly set via the `isolation:` parameter
+    or through `ActiveRecord.with_transaction_isolation_level`, otherwise returns `nil`.
+    Nested transactions return the parent transaction's isolation level.
+
+    ```ruby
+    # Returns nil when no transaction
+    User.connection.current_transaction.isolation # => nil
+
+    # Returns explicitly set isolation level
+    User.transaction(isolation: :serializable) do
+      User.connection.current_transaction.isolation # => :serializable
+    end
+
+    # Returns nil when isolation not explicitly set
+    User.transaction do
+      User.connection.current_transaction.isolation # => nil
+    end
+
+    # Nested transactions inherit parent's isolation
+    User.transaction(isolation: :read_committed) do
+      User.transaction do
+        User.connection.current_transaction.isolation # => :read_committed
+      end
+    end
+    ```
+
+    *Kir Shatrov*
+
+*   Emit a warning for pg gem < 1.6.0 when using PostgreSQL 18+
+
+    *Yasuo Honda*
+
+*   Fix `#merge` with `#or` or `#and` and a mixture of attributes and SQL strings resulting in an incorrect query.
+
+    ```ruby
+    base = Comment.joins(:post).where(user_id: 1).where("recent = 1")
+    puts base.merge(base.where(draft: true).or(Post.where(archived: true))).to_sql
+    ```
+
+    Before:
+
+    ```SQL
+    SELECT "comments".* FROM "comments"
+    INNER JOIN "posts" ON "posts"."id" = "comments"."post_id"
+    WHERE (recent = 1)
+    AND (
+      "comments"."user_id" = 1
+      AND (recent = 1)
+      AND "comments"."draft" = 1
+      OR "posts"."archived" = 1
+    )
+    ```
+
+    After:
+
+    ```SQL
+    SELECT "comments".* FROM "comments"
+    INNER JOIN "posts" ON "posts"."id" = "comments"."post_id"
+    WHERE "comments"."user_id" = 1
+    AND (recent = 1)
+    AND (
+      "comments"."user_id" = 1
+      AND (recent = 1)
+      AND "comments"."draft" = 1
+      OR "posts"."archived" = 1
+    )
+    ```
+
+    *Joshua Young*
+
+*   Make schema dumper to account for `ActiveRecord.dump_schemas` when dumping in `:ruby` format.
+
+    *fatkodima*
+
+*   Add `:touch` option to `update_column`/`update_columns` methods.
+
+    ```ruby
+    # Will update :updated_at/:updated_on alongside :nice column.
+    user.update_column(:nice, true, touch: true)
+
+    # Will update :updated_at/:updated_on alongside :last_ip column
+    user.update_columns(last_ip: request.remote_ip, touch: true)
+    ```
+
+    *Dmitrii Ivliev*
+
+*   Optimize Active Record batching further when using ranges.
+
+    Tested on a PostgreSQL table with 10M records and batches of 10k records, the generation
+    of relations for the 1000 batches was `4.8x` faster (`6.8s` vs. `1.4s`), used `900x`
+    less bandwidth (`180MB` vs. `0.2MB`) and allocated `45x` less memory (`490MB` vs. `11MB`).
+
+    *Maxime Réty*, *fatkodima*
+
+*   Include current character length in error messages for index and table name length validations.
+
+    *Joshua Young*
+
+*   Add `rename_schema` method for PostgreSQL.
+
+    *T S Vallender*
+
+*   Implement support for deprecating associations:
+
+    ```ruby
+    has_many :posts, deprecated: true
+    ```
+
+    With that, Active Record will report any usage of the `posts` association.
+
+    Three reporting modes are supported (`:warn`, `:raise`, and `:notify`), and
+    backtraces can be enabled or disabled. Defaults are `:warn` mode and
+    disabled backtraces.
+
+    Please, check the docs for further details.
+
+    *Xavier Noria*
+
+*   PostgreSQL adapter create DB now supports `locale_provider` and `locale`.
+
+    *Bengt-Ove Hollaender*
+
+*   Use ntuples to populate row_count instead of count for Postgres
+
+    *Jonathan Calvert*
+
+*   Fix checking whether an unpersisted record is `include?`d in a strictly
+    loaded `has_and_belongs_to_many` association.
+
+    *Hartley McGuire*
+
+*   Add ability to change transaction isolation for all pools within a block.
+
+    This functionality is useful if your application needs to change the database
+    transaction isolation for a request or action.
+
+    Calling `ActiveRecord.with_transaction_isolation_level(level) {}` in an around filter or
+    middleware will set the transaction isolation for all pools accessed within the block,
+    but not for the pools that aren't.
+
+    This works with explicit and implicit transactions:
+
+    ```ruby
+    ActiveRecord.with_transaction_isolation_level(:read_committed) do
+      Tag.transaction do # opens a transaction explicitly
+        Tag.create!
+      end
+    end
+    ```
+
+    ```ruby
+    ActiveRecord.with_transaction_isolation_level(:read_committed) do
+      Tag.create! # opens a transaction implicitly
+    end
+    ```
+
+    *Eileen M. Uchitelle*
+
+*   Raise `ActiveRecord::MissingRequiredOrderError` when order dependent finder methods (e.g. `#first`, `#last`) are
+    called without `order` values on the relation, and the model does not have any order columns (`implicit_order_column`,
+    `query_constraints`, or `primary_key`) to fall back on.
+
+    This change will be introduced with a new framework default for Rails 8.1, and the current behavior of not raising
+    an error has been deprecated with the aim of removing the configuration option in Rails 8.2.
+
+    ```ruby
+    config.active_record.raise_on_missing_required_finder_order_columns = true
+    ```
+
+    *Joshua Young*
+
+*   `:class_name` is now invalid in polymorphic `belongs_to` associations.
+
+    Reason is `:class_name` does not make sense in those associations because
+    the class name of target records is dynamic and stored in the type column.
+
+    Existing polymorphic associations setting this option can just delete it.
+    While it did not raise, it had no effect anyway.
+
+    *Xavier Noria*
+
+*   Add support for multiple databases to `db:migrate:reset`.
+
+    *Joé Dupuis*
+
+*   Add `affected_rows` to `ActiveRecord::Result`.
+
+    *Jenny Shen*
+
+*   Enable passing retryable SqlLiterals to `#where`.
+
+    *Hartley McGuire*
+
+*   Set default for primary keys in `insert_all`/`upsert_all`.
+
+    Previously in Postgres, updating and inserting new records in one upsert wasn't possible
+    due to null primary key values. `nil` primary key values passed into `insert_all`/`upsert_all`
+    are now implicitly set to the default insert value specified by adapter.
+
+    *Jenny Shen*
+
+*   Add a load hook `active_record_database_configurations` for `ActiveRecord::DatabaseConfigurations`
+
+    *Mike Dalessio*
+
+*   Use `TRUE` and `FALSE` for SQLite queries with boolean columns.
+
+    *Hartley McGuire*
+
+*   Bump minimum supported SQLite to 3.23.0.
+
+    *Hartley McGuire*
+
+*   Allow allocated Active Records to lookup associations.
+
+    Previously, the association cache isn't setup on allocated record objects, so association
+    lookups will crash. Test frameworks like mocha use allocate to check for stubbable instance
+    methods, which can trigger an association lookup.
+
+    *Gannon McGibbon*
+
+*   Encryption now supports `support_unencrypted_data: true` being set per-attribute.
+
+    Previously this only worked if `ActiveRecord::Encryption.config.support_unencrypted_data == true`.
+    Now, if the global config is turned off, you can still opt in for a specific attribute.
+
+    ```ruby
+    # ActiveRecord::Encryption.config.support_unencrypted_data = true
+    class User < ActiveRecord::Base
+      encrypts :name, support_unencrypted_data: false # only supports encrypted data
+      encrypts :email # supports encrypted or unencrypted data
+    end
+    ```
+
+    ```ruby
+    # ActiveRecord::Encryption.config.support_unencrypted_data = false
+    class User < ActiveRecord::Base
+      encrypts :name, support_unencrypted_data: true # supports encrypted or unencrypted data
+      encrypts :email  # only supports encrypted data
+    end
+    ```
+
+    *Alex Ghiculescu*
+
+*   Model generator no longer needs a database connection to validate column types.
+
+    *Mike Dalessio*
+
+*   Allow signed ID verifiers to be configurable via `Rails.application.message_verifiers`
+
+    Prior to this change, the primary way to configure signed ID verifiers was
+    to set `signed_id_verifier` on each model class:
+
+      ```ruby
+      Post.signed_id_verifier = ActiveSupport::MessageVerifier.new(...)
+      Comment.signed_id_verifier = ActiveSupport::MessageVerifier.new(...)
+      ```
+
+    And if the developer did not set `signed_id_verifier`, a verifier would be
+    instantiated with a secret derived from `secret_key_base` and the following
+    options:
+
+      ```ruby
+      { digest: "SHA256", serializer: JSON, url_safe: true }
+      ```
+
+    Thus it was cumbersome to rotate configuration for all verifiers.
+
+    This change defines a new Rails config: [`config.active_record.use_legacy_signed_id_verifier`][].
+    The default value is `:generate_and_verify`, which preserves the previous
+    behavior. However, when set to `:verify`, signed ID verifiers will use
+    configuration from `Rails.application.message_verifiers` (specifically,
+    `Rails.application.message_verifiers["active_record/signed_id"]`) to
+    generate and verify signed IDs, but will also verify signed IDs using the
+    older configuration.
+
+    To avoid complication, the new behavior only applies when `signed_id_verifier_secret`
+    is not set on a model class or any of its ancestors. Additionally,
+    `signed_id_verifier_secret` is now deprecated. If you are currently setting
+    `signed_id_verifier_secret` on a model class, you can set `signed_id_verifier`
+    instead:
+
+      ```ruby
+      # BEFORE
+      Post.signed_id_verifier_secret = "my secret"
+
+      # AFTER
+      Post.signed_id_verifier = ActiveSupport::MessageVerifier.new("my secret", digest: "SHA256", serializer: JSON, url_safe: true)
+      ```
+
+    To ease migration, `signed_id_verifier` has also been changed to behave as a
+    `class_attribute` (i.e. inheritable), but _only when `signed_id_verifier_secret`
+    is not set_:
+
+      ```ruby
+      # BEFORE
+      ActiveRecord::Base.signed_id_verifier = ActiveSupport::MessageVerifier.new(...)
+      Post.signed_id_verifier == ActiveRecord::Base.signed_id_verifier # => false
+
+      # AFTER
+      ActiveRecord::Base.signed_id_verifier = ActiveSupport::MessageVerifier.new(...)
+      Post.signed_id_verifier == ActiveRecord::Base.signed_id_verifier # => true
+
+      Post.signed_id_verifier_secret = "my secret" # => deprecation warning
+      Post.signed_id_verifier == ActiveRecord::Base.signed_id_verifier # => false
+      ```
+
+    Note, however, that it is recommended to eventually migrate from
+    model-specific verifiers to a unified configuration managed by
+    `Rails.application.message_verifiers`. `ActiveSupport::MessageVerifier#rotate`
+    can facilitate that transition. For example:
+
+      ```ruby
+      # BEFORE
+      # Generate and verify signed Post IDs using Post-specific configuration
+      Post.signed_id_verifier = ActiveSupport::MessageVerifier.new("post secret", ...)
+
+      # AFTER
+      # Generate and verify signed Post IDs using the unified configuration
+      Post.signed_id_verifier = Post.signed_id_verifier.dup
+      # Fall back to Post-specific configuration when verifying signed IDs
+      Post.signed_id_verifier.rotate("post secret", ...)
+      ```
+
+    [`config.active_record.use_legacy_signed_id_verifier`]: https://guides.rubyonrails.org/v8.1/configuring.html#config-active-record-use-legacy-signed-id-verifier
+
+    *Ali Sepehri*, *Jonathan Hefner*
+>>>>>>> main
+
 *   Prepend `extra_flags` in postgres' `structure_load`
 
 
@@ -201,7 +532,7 @@
     `WITH RECURSIVE` or `DISTINCT` statements. Those were never supported and were ignored
     when generating the SQL query.
 
-    An error will be raised in a future Rails release. This behaviour will be consistent
+    An error will be raised in a future Rails release. This behavior will be consistent
     with `delete_all` which currently raises an error for unsupported statements.
 
     *Edouard Chin*

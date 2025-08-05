@@ -662,6 +662,31 @@ are stored before the form is submitted, they can be used to retain uploads when
 <%= form.file_field :avatar, direct_upload: true %>
 ```
 
+## Querying
+
+Active Storage attachments are Active Record associations behind the scenes, so you can use the usual [query methods](active_record_querying.html) to look up records for attachments that meet specific criteria.
+
+### `has_one_attached`
+
+[`has_one_attached`](https://api.rubyonrails.org/classes/ActiveStorage/Attached/Model.html#method-i-has_one_attached) creates a `has_one` association named `"<name>_attachment"` and a `has_one :through` association named `"<name>_blob"`.
+To select every user where the avatar is a PNG, run the following:
+
+```ruby
+User.joins(:avatar_blob).where(active_storage_blobs: { content_type: "image/png" })
+```
+
+### `has_many_attached`
+
+[`has_many_attached`](https://api.rubyonrails.org/classes/ActiveStorage/Attached/Model.html#method-i-has_many_attached) creates a `has_many` association called `"<name>_attachments"` and a `has_many :through` association called `"<name>_blobs"` (note the plural).
+To select all messages where images are videos rather than photos you can do the following:
+
+```ruby
+Message.joins(:images_blobs).where(active_storage_blobs: { content_type: "video/mp4" })
+```
+
+The query will filter on the [**`ActiveStorage::Blob`**](https://api.rubyonrails.org/classes/ActiveStorage/Blob.html), not the [attachment record](https://api.rubyonrails.org/classes/ActiveStorage/Attachment.html) because these are plain SQL joins. You can combine the blob predicates above with any other scope conditions, just as you would with any other Active Record query.
+
+
 Removing Files
 --------------
 
@@ -693,8 +718,8 @@ require a higher level of protection consider implementing
 
 ### Redirect Mode
 
-To generate a permanent URL for a blob, you can pass the blob to the
-[`url_for`][ActionView::RoutingUrlFor#url_for] view helper. This generates a
+To generate a permanent URL for a blob, you can pass the attachment or the blob to
+the [`url_for`][ActionView::RoutingUrlFor#url_for] view helper. This generates a
 URL with the blob's [`signed_id`][ActiveStorage::Blob#signed_id]
 that is routed to the blob's [`RedirectController`][`ActiveStorage::Blobs::RedirectController`]
 
@@ -1049,7 +1074,27 @@ directly from the client to the cloud.
 
 ### Usage
 
-1. Include `activestorage.js` in your application's JavaScript bundle.
+1. Include the Active Storage JavaScript in your application's JavaScript bundle or reference it directly.
+
+    Requiring directly without bundling through the asset pipeline in the application HTML with autostart:
+
+    ```erb
+    <%= javascript_include_tag "activestorage" %>
+    ```
+
+    Requiring via importmap-rails without bundling through the asset pipeline in the application HTML without autostart as ESM:
+
+    ```ruby
+    # config/importmap.rb
+    pin "@rails/activestorage", to: "activestorage.esm.js"
+    ```
+
+    ```html
+    <script type="module-shim">
+      import * as ActiveStorage from "@rails/activestorage"
+      ActiveStorage.start()
+    </script>
+    ```
 
     Using the asset pipeline:
 
@@ -1064,7 +1109,7 @@ directly from the client to the cloud.
     ActiveStorage.start()
     ```
 
-2. Add `direct_upload: true` to your [file field](form_helpers.html#uploading-files):
+2. Annotate file inputs with the direct upload URL using Rails' [file field helper](form_helpers.html#uploading-files).
 
     ```erb
     <%= form.file_field :attachments, multiple: true, direct_upload: true %>
@@ -1573,7 +1618,7 @@ Minitest.after_run do
 end
 ```
 
-[fixtures]: testing.html#the-low-down-on-fixtures
+[fixtures]: testing.html#fixtures
 [`ActiveStorage::FixtureSet`]: https://api.rubyonrails.org/classes/ActiveStorage/FixtureSet.html
 
 ### Configuring services

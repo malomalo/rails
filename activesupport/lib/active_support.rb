@@ -44,6 +44,7 @@ module ActiveSupport
   autoload :CurrentAttributes
   autoload :Dependencies
   autoload :DescendantsTracker
+  autoload :Editor
   autoload :ExecutionWrapper
   autoload :Executor
   autoload :ErrorReporter
@@ -104,6 +105,7 @@ module ActiveSupport
 
   cattr_accessor :test_order # :nodoc:
   cattr_accessor :test_parallelization_threshold, default: 50 # :nodoc:
+  cattr_accessor :parallelize_test_databases, default: true # :nodoc:
 
   @error_reporter = ActiveSupport::ErrorReporter.new
   singleton_class.attr_accessor :error_reporter # :nodoc:

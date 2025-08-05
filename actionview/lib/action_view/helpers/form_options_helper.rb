@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
-require "cgi"
+require "cgi/escape"
+require "cgi/util" if RUBY_VERSION < "3.5"
 require "erb"
 require "active_support/core_ext/string/output_safety"
 require "active_support/core_ext/array/extract_options"
@@ -370,7 +371,7 @@ module ActionView
           html_attributes[:disabled] ||= disabled && option_value_selected?(value, disabled)
           html_attributes[:value] = value
 
-          tag_builder.content_tag_string(:option, text, html_attributes)
+          tag_builder.option(text, **html_attributes)
         end.join("\n").html_safe
       end
 

@@ -397,10 +397,6 @@ module ActiveRecord
         @raw_connection = nil
       end
 
-      def native_database_types # :nodoc:
-        self.class.native_database_types
-      end
-
       def self.native_database_types # :nodoc:
         @native_database_types ||= begin
           types = NATIVE_DATABASE_TYPES.dup
@@ -616,7 +612,7 @@ module ActiveRecord
         }
       end
 
-      # Returns the configured supported identifier length supported by PostgreSQL
+      # Returns the configured maximum supported identifier length supported by PostgreSQL
       def max_identifier_length
         @max_identifier_length ||= query_value("SHOW max_identifier_length", "SCHEMA").to_i
       end
@@ -669,6 +665,9 @@ module ActiveRecord
       def check_version # :nodoc:
         if database_version < 9_03_00 # < 9.3
           raise "Your version of PostgreSQL (#{database_version}) is too old. Active Record supports PostgreSQL >= 9.3."
+        end
+        if database_version >= 18_00_00 && Gem::Version.new(PG::VERSION) < Gem::Version.new("1.6.0")
+          warn "pg gem version #{PG::VERSION} is known to be incompatible with PostgreSQL 18+. Please upgrade to pg 1.6.0 or later."
         end
       end
 

@@ -29,6 +29,7 @@ module Arel # :nodoc: all
           collect_nodes_for o.wheres, collector, " WHERE ", " AND "
           collect_nodes_for o.orders, collector, " ORDER BY "
           maybe_visit o.limit, collector
+          maybe_visit o.comment, collector
         end
 
         def prepare_update_statement(o)
@@ -66,14 +67,6 @@ module Arel # :nodoc: all
         def visit_Arel_Nodes_SelectStatement(o, collector)
           o.limit = Arel::Nodes::Limit.new(-1) if o.offset && !o.limit
           super
-        end
-
-        def visit_Arel_Nodes_True(o, collector)
-          collector << "1"
-        end
-
-        def visit_Arel_Nodes_False(o, collector)
-          collector << "0"
         end
 
         def visit_Arel_Nodes_IsNotDistinctFrom(o, collector)

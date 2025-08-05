@@ -1756,7 +1756,7 @@ description in `app/views/products/_form.html.erb` before the submit button.
 
   <div>
     <%= form.label :description, style: "display: block" %>
-    <%= form.rich_text_area :description %>
+    <%= form.rich_textarea :description %>
   </div>
 
   <div>
@@ -2261,9 +2261,9 @@ emails anytime the inventory count changes from 0 to a positive number.
 
 ```ruby#9-19
 class Product < ApplicationRecord
+  has_many :subscribers, dependent: :destroy
   has_one_attached :featured_image
   has_rich_text :description
-  has_many :subscribers, dependent: :destroy
 
   validates :name, presence: true
   validates :inventory_count, numericality: { greater_than_or_equal_to: 0 }
@@ -2315,7 +2315,7 @@ module Product::Notifications
   end
 
   def back_in_stock?
-    inventory_count_previously_was == 0 && inventory_count > 0
+    inventory_count_previously_was.zero? && inventory_count > 0
   end
 
   def notify_subscribers
@@ -2331,7 +2331,7 @@ as if it’s part of that class. At the same time, the methods defined in the
 module become regular methods you can call on objects (instances) of that class.
 
 Now that the code triggering the notification has been extracted into the
-Notification module, the Product model can be simplified to include the
+Notifications module, the Product model can be simplified to include the
 Notifications module.
 
 ```ruby#2
@@ -2363,9 +2363,16 @@ A subscriber may want to unsubscribe at some point, so let's build that next.
 First, we need a route for unsubscribing that will be the URL we include in
 emails.
 
-```ruby
+```ruby#6
+Rails.application.routes.draw do
+  # ...
+  resources :products do
+    resources :subscribers, only: [ :create ]
+  end
   resource :unsubscribe, only: [ :show ]
 ```
+
+The unsubscribe route is added at the top level and uses the singular `resource` in order to handle routes like `/unsubscribe?token=xyz`.
 
 Active Record has a feature called `generates_token_for` that can generate
 unique tokens to find database records for different purposes. We can use this
@@ -2533,6 +2540,8 @@ pin "@hotwired/turbo-rails", to: "turbo.min.js"
 pin "@hotwired/stimulus", to: "stimulus.min.js"
 pin "@hotwired/stimulus-loading", to: "stimulus-loading.js"
 pin_all_from "app/javascript/controllers", under: "controllers"
+pin "trix"
+pin "@rails/actiontext", to: "actiontext.esm.js"
 ```
 
 TIP: Each pin maps a JavaScript package name (e.g., `"@hotwired/turbo-rails"`)

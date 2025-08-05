@@ -8,7 +8,6 @@
 #
 # It is also good to know what is the bare minimum to get
 # Rails booted up.
-require_relative "../../../tools/strict_warnings"
 require "fileutils"
 require "shellwords"
 
@@ -119,13 +118,6 @@ module TestHelpers
       unless options[:initializers]
         Dir["#{app_path}/config/initializers/**/*.rb"].each do |initializer|
           File.delete(initializer)
-        end
-      end
-
-      routes = File.read("#{app_path}/config/routes.rb")
-      if routes =~ /(\n\s*end\s*)\z/
-        File.open("#{app_path}/config/routes.rb", "w") do |f|
-          f.puts $` + "\nActionDispatch.deprecator.silence { match ':controller(/:action(/:id))(.:format)', via: :all }\n" + $1
         end
       end
 
@@ -482,6 +474,14 @@ module TestHelpers
 
     def controller(name, contents)
       app_file("app/controllers/#{name}_controller.rb", contents)
+    end
+
+    def routes(routes)
+      app_file("config/routes.rb", <<~RUBY)
+        Rails.application.routes.draw do
+          #{routes}
+        end
+      RUBY
     end
 
     def use_frameworks(arr)

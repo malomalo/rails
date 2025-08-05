@@ -82,6 +82,10 @@ module ActiveStorage
     end
 
     initializer "active_storage.configs" do
+      config.before_initialize do |app|
+        ActiveStorage.touch_attachment_records = app.config.active_storage.touch_attachment_records != false
+      end
+
       config.after_initialize do |app|
         ActiveStorage.logger            = app.config.active_storage.logger || Rails.logger
         ActiveStorage.variant_processor = app.config.active_storage.variant_processor
@@ -144,7 +148,6 @@ module ActiveStorage
         ActiveStorage.variable_content_types = app.config.active_storage.variable_content_types || []
         ActiveStorage.web_image_content_types = app.config.active_storage.web_image_content_types || []
         ActiveStorage.content_types_to_serve_as_binary = app.config.active_storage.content_types_to_serve_as_binary || []
-        ActiveStorage.touch_attachment_records = app.config.active_storage.touch_attachment_records != false
         ActiveStorage.service_urls_expire_in = app.config.active_storage.service_urls_expire_in || 5.minutes
         ActiveStorage.urls_expire_in = app.config.active_storage.urls_expire_in
         ActiveStorage.content_types_allowed_inline = app.config.active_storage.content_types_allowed_inline || []
@@ -171,9 +174,9 @@ module ActiveStorage
       end
     end
 
-    initializer "active_storage.services" do
+    initializer "active_storage.services" do |app|
       ActiveSupport.on_load(:active_storage_blob) do
-        configs = Rails.configuration.active_storage.service_configurations ||=
+        configs = app.config.active_storage.service_configurations ||=
           begin
             config_file = Rails.root.join("config/storage/#{Rails.env}.yml")
             config_file = Rails.root.join("config/storage.yml") unless config_file.exist?
@@ -184,7 +187,7 @@ module ActiveStorage
 
         ActiveStorage::Blob.services = ActiveStorage::Service::Registry.new(configs)
 
-        if config_choice = Rails.configuration.active_storage.service
+        if config_choice = app.config.active_storage.service
           ActiveStorage::Blob.service = ActiveStorage::Blob.services.fetch(config_choice)
         end
       end
@@ -206,7 +209,7 @@ module ActiveStorage
     initializer "action_view.configuration" do
       config.after_initialize do |app|
         ActiveSupport.on_load(:action_view) do
-          multiple_file_field_include_hidden = app.config.active_storage.delete(:multiple_file_field_include_hidden)
+          multiple_file_field_include_hidden = app.config.active_storage.multiple_file_field_include_hidden
 
           unless multiple_file_field_include_hidden.nil?
             ActionView::Helpers::FormHelper.multiple_file_field_include_hidden = multiple_file_field_include_hidden

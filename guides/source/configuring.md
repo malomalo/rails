@@ -60,7 +60,9 @@ Below are the default values associated with each target version. In cases of co
 
 #### Default Values for Target Version 8.1
 
+- [`config.action_controller.action_on_path_relative_redirect`](#config-action-controller-action-on-path-relative-redirect): `:raise`
 - [`config.action_controller.escape_json_responses`](#config-action-controller-escape-json-responses): `false`
+- [`config.active_record.raise_on_missing_required_finder_order_columns`](#config-active-record-raise-on-missing-required-finder-order-columns): `true`
 - [`config.yjit`](#config-yjit): `!Rails.env.local?`
 
 #### Default Values for Target Version 8.0
@@ -369,40 +371,6 @@ Sets up the application-wide encoding. Defaults to UTF-8.
 
 Sets the exceptions application invoked by the `ShowException` middleware when an exception happens.
 Defaults to `ActionDispatch::PublicExceptions.new(Rails.public_path)`.
-
-Exceptions applications need to handle `ActionDispatch::Http::MimeNegotiation::InvalidType` errors, which are raised when a client sends an invalid `Accept` or `Content-Type` header.
-The default `ActionDispatch::PublicExceptions` application does this automatically, setting `Content-Type` to `text/html` and returning a `406 Not Acceptable` status.
-Failure to handle this error will result in a `500 Internal Server Error`.
-
-Using the `Rails.application.routes` `RouteSet` as the exceptions application also requires this special handling.
-It might look something like this:
-
-```ruby
-# config/application.rb
-config.exceptions_app = CustomExceptionsAppWrapper.new(exceptions_app: routes)
-
-# lib/custom_exceptions_app_wrapper.rb
-class CustomExceptionsAppWrapper
-  def initialize(exceptions_app:)
-    @exceptions_app = exceptions_app
-  end
-
-  def call(env)
-    request = ActionDispatch::Request.new(env)
-
-    fallback_to_html_format_if_invalid_mime_type(request)
-
-    @exceptions_app.call(env)
-  end
-
-  private
-    def fallback_to_html_format_if_invalid_mime_type(request)
-      request.formats
-    rescue ActionDispatch::Http::MimeNegotiation::InvalidType
-      request.set_header "CONTENT_TYPE", "text/html"
-    end
-end
-```
 
 #### `config.file_watcher`
 
@@ -1206,7 +1174,7 @@ The default behavior is to report all warnings. Warnings to ignore can be specif
 
 Controls the strategy class used to perform schema statement methods in a migration. The default class
 delegates to the connection adapter. Custom strategies should inherit from `ActiveRecord::Migration::ExecutionStrategy`,
-or may inherit from `DefaultStrategy`, which will preserve the default behaviour for methods that aren't implemented:
+or may inherit from `DefaultStrategy`, which will preserve the default behavior for methods that aren't implemented:
 
 ```ruby
 class CustomMigrationStrategy < ActiveRecord::Migration::DefaultStrategy
@@ -1522,6 +1490,8 @@ Define an `Array` specifying the key/value tags to be inserted in an SQL comment
 `[ :application, :controller, :action, :job ]`. The available tags are: `:application`, `:controller`,
 `:namespaced_controller`, `:action`, `:job`, and `:source_location`.
 
+WARNING: Calculating the `:source_location` of a query can be slow, so you should consider its impact if using it in a production environment.
+
 #### `config.active_record.query_log_tags_format`
 
 A `Symbol` specifying the formatter to use for tags. Valid values are `:sqlcommenter` and `:legacy`.
@@ -1539,6 +1509,17 @@ Specifies whether or not to enable caching of query log tags. For applications
 that have a large number of queries, caching query log tags can provide a
 performance benefit when the context does not change during the lifetime of the
 request or job execution. Defaults to `false`.
+
+#### `config.active_record.query_log_tags_prepend_comment`
+
+Specifies whether or not to prepend query log tags comment to the query.
+
+By default comments are appended at the end of the query. Certain databases, such as MySQL will
+truncate the query text. This is the case for slow query logs and the results of querying
+some InnoDB internal tables where the length of the query is more than 1024 bytes.
+In order to not lose the log tags comments from the queries, you can prepend the comments using this option.
+
+Defaults to `false`.
 
 #### `config.active_record.schema_cache_ignored_tables`
 
@@ -1697,6 +1678,28 @@ required:
 config.active_record.database_cli = { postgresql: "pgcli", mysql: %w[ mycli mysql ] }
 ```
 
+#### `config.active_record.use_legacy_signed_id_verifier`
+
+Controls whether signed IDs are generated and verified using legacy options. Can be set to:
+
+* `:generate_and_verify` (default) - Generate and verify signed IDs using the following legacy options:
+
+    ```ruby
+    { digest: "SHA256", serializer: JSON, url_safe: true }
+    ```
+
+* `:verify` - Generate and verify signed IDs using options from [`Rails.application.message_verifiers`][], but fall back to verifying with the same options as `:generate_and_verify`.
+
+* false - Generate and verify signed IDs using options from [`Rails.application.message_verifiers`][] only.
+
+The purpose of this setting is to provide a smooth transition to a unified configuration for all message verifiers. Having a unified configuration makes it more straightforward to rotate secrets and upgrade signing algorithms.
+
+WARNING: Setting this to false may cause old signed IDs to become unreadable if `Rails.application.message_verifiers` is not properly configured. Use [`MessageVerifiers#rotate`][ActiveSupport::MessageVerifiers#rotate] or [`MessageVerifiers#prepend`][ActiveSupport::MessageVerifiers#prepend] to configure `Rails.application.message_verifiers` with the appropriate options, such as `:digest` and `:url_safe`.
+
+[`Rails.application.message_verifiers`]: https://api.rubyonrails.org/classes/Rails/Application.html#method-i-message_verifiers
+[ActiveSupport::MessageVerifiers#rotate]: https://api.rubyonrails.org/classes/ActiveSupport/MessageVerifiers.html#method-i-rotate
+[ActiveSupport::MessageVerifiers#prepend]: https://api.rubyonrails.org/classes/ActiveSupport/MessageVerifiers.html#method-i-prepend
+
 #### `ActiveRecord::ConnectionAdapters::Mysql2Adapter.emulate_booleans` and `ActiveRecord::ConnectionAdapters::TrilogyAdapter.emulate_booleans`
 
 Controls whether the Active Record MySQL adapter will consider all `tinyint(1)` columns as booleans. Defaults to `true`.
@@ -1794,6 +1797,44 @@ config.active_record.protocol_adapters.mysql = "trilogy"
 ```
 
 If no mapping is found, the protocol is used as the adapter name.
+
+#### `config.active_record.deprecated_associations_options`
+
+If present, this has to be a hash with keys `:mode` and/or `:backtrace`:
+
+```ruby
+config.active_record.deprecated_associations_options = { mode: :notify, backtrace: true }
+```
+
+* In `:warn` mode, accessing the deprecated association is reported by the
+  Active Record logger. This is the default mode.
+
+* In `:raise` mode, usage raises an `ActiveRecord::DeprecatedAssociationError`
+  with a similar message and a clean backtrace in the exception object.
+
+* In `:notify` mode, a `deprecated_association.active_record` Active Support
+  notification is published. Please, see details about its payload in the
+  [Active Support Instrumentation guide](active_support_instrumentation.html).
+
+Backtraces are disabled by default. If `:backtrace` is true, warnings include a
+clean backtrace in the message, and notifications have a `:backtrace` key in the
+payload with an array of clean `Thread::Backtrace::Location` objects. Exceptions
+always have a clean stack trace.
+
+Clean backtraces are computed using the Active Record backtrace cleaner.
+
+#### `config.active_record.raise_on_missing_required_finder_order_columns`
+
+Raises an error when order dependent finder methods (e.g. `#first`, `#second`) are called without `order` values
+on the relation, and the model does not have any order columns (`implicit_order_column`, `query_constraints`, or
+`primary_key`) to fall back on.
+
+The default value depends on the `config.load_defaults` target version:
+
+| Starting with version | The default value is |
+| --------------------- | -------------------- |
+| (original)            | `false`              |
+| 8.1                   | `true`               |
 
 ### Configuring Action Controller
 
@@ -1930,6 +1971,26 @@ The default value depends on the `config.load_defaults` target version:
 
 [redirect_to]: https://api.rubyonrails.org/classes/ActionController/Redirecting.html#method-i-redirect_to
 
+#### `config.action_controller.action_on_path_relative_redirect`
+
+Controls how Rails handles paths relative URL redirects.
+
+When set to `:log` (default), Rails will log a warning when a path relative URL redirect
+is detected. When set to `:notify`, Rails will publish an
+`unsafe_redirect.action_controller` notification event. When set to `:raise`, Rails
+will raise an `ActionController::Redirecting::UnsafeRedirectError`.
+
+This helps detect potentially unsafe redirects that could be exploited for open
+redirect attacks.
+
+The default value depends on the `config.load_defaults` target version:
+
+| Starting with version | The default value is |
+| --------------------- | -------------------- |
+| (original)            | `:log`               |
+| 8.1                   | `:raise`             |
+
+
 #### `config.action_controller.log_query_tags_around_actions`
 
 Determines whether controller context for query tags will be automatically
@@ -1959,6 +2020,11 @@ The default value depends on the `config.load_defaults` target version:
 | 7.0                   | `true`               |
 
 [params_wrapper]: https://api.rubyonrails.org/classes/ActionController/ParamsWrapper.html
+
+#### `config.action_controller.allowed_redirect_hosts`
+
+Specifies a list of allowed hosts for redirects. `redirect_to` will allow redirects to them without raising an
+`UnsafeRedirectError` error.
 
 #### `ActionController::Base.wrap_parameters`
 
@@ -2028,6 +2094,26 @@ Specifies the default character set for all renders. Defaults to `nil`.
 #### `config.action_dispatch.tld_length`
 
 Sets the TLD (top-level domain) length for the application. Defaults to `1`.
+
+#### `config.action_dispatch.domain_extractor`
+
+Configures the domain extraction strategy used by Action Dispatch for parsing host names into domain and subdomain components. This must be an object that responds to `domain_from(host, tld_length)` and `subdomains_from(host, tld_length)` methods.
+
+Defaults to `ActionDispatch::Http::URL::DomainExtractor`, which provides the standard domain parsing logic. You can provide a custom extractor to implement specialized domain parsing behavior:
+
+```ruby
+class CustomDomainExtractor
+  def self.domain_from(host, tld_length)
+    # Custom domain extraction logic
+  end
+
+  def self.subdomains_from(host, tld_length)
+    # Custom subdomain extraction logic
+  end
+end
+
+config.action_dispatch.domain_extractor = CustomDomainExtractor
+```
 
 #### `config.action_dispatch.ignore_accept_header`
 
@@ -3821,6 +3907,7 @@ These are the load hooks you can use in your own code. To hook into the initiali
 | `ActiveModel::Model`                 | `active_model`                       |
 | `ActiveModel::Translation`           | `active_model_translation`           |
 | `ActiveRecord::Base`                 | `active_record`                      |
+| `ActiveRecord::DatabaseConfigurations` | `active_record_database_configurations` |
 | `ActiveRecord::Encryption`           | `active_record_encryption`           |
 | `ActiveRecord::TestFixtures`         | `active_record_fixtures`             |
 | `ActiveRecord::ConnectionAdapters::PostgreSQLAdapter`    | `active_record_postgresqladapter`    |

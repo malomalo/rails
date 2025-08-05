@@ -1,3 +1,95 @@
+*   Produce a log when `rescue_from` is invoked.
+
+    *Steven Webb*, *Jean Boussier*
+
+*   Allow hosts redirects from `hosts` Rails configuration
+
+    ```ruby
+    config.action_controller.allowed_redirect_hosts << "example.com"
+    ```
+
+    *Kevin Robatel*
+
+*   `rate_limit.action_controller` notification has additional payload
+
+    additional values: count, to, within, by, name, cache_key
+
+    *Jonathan Rochkind*
+
+*   Add JSON support to the built-in health controller.
+
+    The health controller now responds to JSON requests with a structured response
+    containing status and timestamp information. This makes it easier for monitoring
+    tools and load balancers to consume health check data programmatically.
+
+    ```ruby
+    # /up.json
+    {
+      "status": "up",
+      "timestamp": "2025-09-19T12:00:00Z"
+    }
+    ```
+
+    *Francesco Loreti*, *Juan Vásquez*
+
+*   Allow to open source file with a crash from the browser.
+
+    *Igor Kasyanchuk*
+
+*   Always check query string keys for valid encoding just like values are checked.
+
+    *Casper Smits*
+
+*   Always return empty body for HEAD requests in `PublicExceptions` and
+    `DebugExceptions`.
+
+    This is required by `Rack::Lint` (per RFC9110).
+
+    *Hartley McGuire*
+
+*   Add comprehensive support for HTTP Cache-Control request directives according to RFC 9111.
+
+    Provides a `request.cache_control_directives` object that gives access to request cache directives:
+
+    ```ruby
+    # Boolean directives
+    request.cache_control_directives.only_if_cached?  # => true/false
+    request.cache_control_directives.no_cache?        # => true/false
+    request.cache_control_directives.no_store?        # => true/false
+    request.cache_control_directives.no_transform?    # => true/false
+
+    # Value directives
+    request.cache_control_directives.max_age          # => integer or nil
+    request.cache_control_directives.max_stale        # => integer or nil (or true for valueless max-stale)
+    request.cache_control_directives.min_fresh        # => integer or nil
+    request.cache_control_directives.stale_if_error   # => integer or nil
+
+    # Special helpers for max-stale
+    request.cache_control_directives.max_stale?         # => true if max-stale present (with or without value)
+    request.cache_control_directives.max_stale_unlimited? # => true only for valueless max-stale
+    ```
+
+    Example usage:
+
+    ```ruby
+    def show
+      if request.cache_control_directives.only_if_cached?
+        @article = Article.find_cached(params[:id])
+        return head(:gateway_timeout) if @article.nil?
+      else
+        @article = Article.find(params[:id])
+      end
+
+      render :show
+    end
+    ```
+
+    *egg528*
+
+*   Add assert_in_body/assert_not_in_body as the simplest way to check if a piece of text is in the response body.
+
+    *DHH*
+
 *   Include cookie name when calculating maximum allowed size.
 
     *Hartley McGuire*
@@ -107,6 +199,19 @@
     ```
 
     *Jeremy Green*
+
+*   A route pointing to a non-existing controller now returns a 500 instead of a 404.
+
+    A controller not existing isn't a routing error that should result
+    in a 404, but a programming error that should result in a 500 and
+    be reported.
+
+    Until recently, this was hard to untangle because of the support
+    for dynamic `:controller` segment in routes, but since this is
+    deprecated and will be removed in Rails 8.1, we can now easily
+    not consider missing controllers as routing errors.
+
+    *Jean Boussier*
 
 *   Add `check_collisions` option to `ActionDispatch::Session::CacheStore`.
 

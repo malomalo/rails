@@ -119,7 +119,7 @@ module ActiveRecord
 
       # Opens a database console session.
       def self.dbconsole(config, options = {})
-        raise NotImplementedError
+        raise NotImplementedError.new("#{self.class} should define `dbconsole` that accepts a db config and options to implement connecting to the db console")
       end
 
       def initialize(config_or_deprecated_connection, deprecated_logger = nil, deprecated_connection_options = nil, deprecated_config = nil) # :nodoc:
@@ -260,7 +260,11 @@ module ActiveRecord
       end
 
       def valid_type?(type) # :nodoc:
-        !native_database_types[type].nil?
+        self.class.valid_type?(type)
+      end
+
+      def native_database_types # :nodoc:
+        self.class.native_database_types
       end
 
       # this method must only be called while holding connection pool's mutex
@@ -886,6 +890,10 @@ module ActiveRecord
           end
         end
 
+        def valid_type?(type) # :nodoc:
+          !native_database_types[type].nil?
+        end
+
         private
           def initialize_type_map(m)
             register_class_with_limit m, %r(boolean)i,       Type::Boolean
@@ -1084,7 +1092,7 @@ module ActiveRecord
         end
 
         def reconnect
-          raise NotImplementedError
+          raise NotImplementedError.new("#{self.class} should define `reconnect` to implement adapter-specific logic for reconnecting to the database")
         end
 
         # Returns a raw connection for internal use with methods that are known
