@@ -272,10 +272,17 @@ module ActiveRecord
 
     # Returns whether or not this record has been changed in any way (including whether
     # any of its nested autosave associations are likewise changed)
-    def changed_for_autosave?
-      new_record? || has_changes_to_save? || marked_for_destruction? || nested_records_changed_for_autosave?
+    def changed_for_autosave?(memory)
+      if new_record? || has_changes_to_save? || marked_for_destruction?
+        memory[self.object_id] = true
+      elsif memory.has_key?(self.object_id)
+        memory[self.object_id]
+      else
+        memory[self.object_id] = nested_records_changed_for_autosave?(memory)
+      end
     end
 
+    #TODO: can go I think
     def validating_belongs_to_for?(association)
       @validating_belongs_to_for ||= {}
       @validating_belongs_to_for[association]
@@ -295,11 +302,11 @@ module ActiveRecord
       # Returns the record for an association collection that should be validated
       # or saved. If +autosave+ is +false+ only new records will be returned,
       # unless the parent is/was a new record itself.
-      def associated_records_to_validate_or_save(association, new_record, autosave)
+      def associated_records_to_validate_or_save(association, new_record, autosave, memory)
         if new_record || custom_validation_context?
           association && association.target
         elsif autosave
-          association.target.find_all(&:changed_for_autosave?)
+          association.target.find_all { |r| r.changed_for_autosave?(memory) }
         else
           association.target.find_all(&:new_record?)
         end
@@ -308,7 +315,7 @@ module ActiveRecord
       # Go through nested autosave associations that are loaded in memory (without loading
       # any new ones), and return true if any are changed for autosave.
       # Returns false if already called to prevent an infinite loop.
-      def nested_records_changed_for_autosave?
+      def nested_records_changed_for_autosave?(memory)
         @_nested_records_changed_for_autosave_already_called ||= false
         return false if @_nested_records_changed_for_autosave_already_called
         begin
@@ -316,7 +323,7 @@ module ActiveRecord
           self.class._reflections.values.any? do |reflection|
             if reflection.options[:autosave]
               association = association_instance_get(reflection.name)
-              association && Array.wrap(association.target).any?(&:changed_for_autosave?)
+              association && Array.wrap(association.target).any? {|r| r.changed_for_autosave?(memory) }
             end
           end
         ensure
@@ -329,13 +336,16 @@ module ActiveRecord
       def validate_has_one_association(reflection)
         association = association_instance_get(reflection.name)
         record      = association && association.reader
-        return unless record && (record.changed_for_autosave? || custom_validation_context?)
+        return unless record && (record.changed_for_autosave?(@memory) || custom_validation_context?)
 
+        #PATCH: Not sure if below lines are needed in this patch, the test fail
+        # but I think only because it's calling association_valid? even tho
+        # it doesn't do anything?
         inverse_association = reflection.inverse_of && record.association(reflection.inverse_of.name)
         return if inverse_association && (record.validating_belongs_to_for?(inverse_association) ||
           record.autosaving_belongs_to_for?(inverse_association))
 
-        association_valid?(association, record)
+        association_valid?(association, record, @memory)
       end
 
       # Validate the association if <tt>:validate</tt> or <tt>:autosave</tt> is
@@ -343,12 +353,12 @@ module ActiveRecord
       def validate_belongs_to_association(reflection)
         association = association_instance_get(reflection.name)
         record      = association && association.reader
-        return unless record && (record.changed_for_autosave? || custom_validation_context?)
+        return unless record && (record.changed_for_autosave?(@memory) || custom_validation_context?)
 
         begin
           @validating_belongs_to_for ||= {}
           @validating_belongs_to_for[association] = true
-          association_valid?(association, record)
+          association_valid?(association, record, @memory)
         ensure
           @validating_belongs_to_for[association] = false
         end
@@ -359,8 +369,8 @@ module ActiveRecord
       # +reflection+.
       def validate_collection_association(reflection)
         if association = association_instance_get(reflection.name)
-          if records = associated_records_to_validate_or_save(association, new_record?, reflection.options[:autosave])
-            records.each { |record| association_valid?(association, record) }
+          if records = associated_records_to_validate_or_save(association, new_record?, reflection.options[:autosave], @memory)
+            records.each { |record| association_valid?(association, record, @memory) }
           end
         end
       end
@@ -368,11 +378,15 @@ module ActiveRecord
       # Returns whether or not the association is valid and applies any errors to
       # the parent, <tt>self</tt>, if it wasn't. Skips any <tt>:autosave</tt>
       # enabled records if they're marked_for_destruction? or destroyed.
-      def association_valid?(association, record)
+      def association_valid?(association, record, memory)
         return true if record.destroyed? || (association.options[:autosave] && record.marked_for_destruction?)
 
         context = validation_context if custom_validation_context?
-        return true if record.valid?(context)
+        return memory["valid#{record.object_id}"] if memory.has_key?("valid#{record.object_id}")
+
+        memory["valid#{record.object_id}"] = true
+        
+        return true if record.valid?(context, memory)
 
         if record.changed? || record.new_record? || context
           associated_errors = record.errors.objects
@@ -394,7 +408,7 @@ module ActiveRecord
           errors.add(association.reflection.name)
         end
 
-        errors.any?
+        memory["valid#{record.object_id}"] = errors.any?
       end
 
       # Is used as an around_save callback to check while saving a collection
@@ -427,13 +441,19 @@ module ActiveRecord
           # reconstruct the scope now that we know the owner's id
           association.reset_scope
 
-          if records = associated_records_to_validate_or_save(association, new_record_before_save, autosave)
+          if records = associated_records_to_validate_or_save(association, new_record_before_save, autosave, @memory)
             if autosave
               records_to_destroy = records.select(&:marked_for_destruction?)
               records_to_destroy.each { |record| association.destroy(record) }
               records -= records_to_destroy
             end
 
+            records.each do |record|
+              if !@memory.has_key?("saved#{record.object_id}")
+                @memory["saved#{record.object_id}"] = true
+              end
+            end
+            
             records.each do |record|
               next if record.destroyed?
 
@@ -443,9 +463,9 @@ module ActiveRecord
                 association.set_inverse_instance(record)
 
                 if autosave
-                  saved = association.insert_record(record, false)
+                  saved = association.insert_record(record, false, false, @memory)
                 elsif !reflection.nested?
-                  association_saved = association.insert_record(record)
+                  association_saved = association.insert_record(record, true, false, @memory)
 
                   if reflection.validate?
                     errors.add(reflection.name) unless association_saved
@@ -453,7 +473,7 @@ module ActiveRecord
                   end
                 end
               elsif autosave
-                saved = record.save(validate: false)
+                saved = record.save(validate: false, memory: @memory)
               end
 
               raise(RecordInvalid.new(association.owner)) unless saved
@@ -484,7 +504,7 @@ module ActiveRecord
         elsif autosave != false
           primary_key = Array(compute_primary_key(reflection, self)).map(&:to_s)
           primary_key_value = primary_key.map { |key| _read_attribute(key) }
-          return unless (autosave && record.changed_for_autosave?) || _record_changed?(reflection, record, primary_key_value)
+          return unless (autosave && record.changed_for_autosave?(@memory)) || _record_changed?(reflection, record, primary_key_value)
 
           unless reflection.through_reflection
             foreign_key = Array(reflection.foreign_key)
@@ -500,7 +520,11 @@ module ActiveRecord
           inverse_association = reflection.inverse_of && record.association(reflection.inverse_of.name)
           return if inverse_association && record.autosaving_belongs_to_for?(inverse_association)
 
-          saved = record.save(validate: !autosave)
+          saved = if @memory.has_key?("saved#{record.object_id}")
+            @memory["saved#{record.object_id}"]
+          else
+            record.save(validate: !autosave, memory: @memory)
+          end
           raise ActiveRecord::Rollback if !saved && autosave
           saved
         end
@@ -546,11 +570,13 @@ module ActiveRecord
             foreign_key.each { |key| self[key] = nil }
             record.destroy
           elsif autosave != false
-            saved = if record.new_record? || (autosave && record.changed_for_autosave?)
+            saved = if @memory.has_key?("saved#{record.object_id}")
+              @memory["saved#{record.object_id}"]
+            elsif record.new_record? || (autosave && record.changed_for_autosave?(@memory))
               begin
                 @autosaving_belongs_to_for ||= {}
                 @autosaving_belongs_to_for[association] = true
-                record.save(validate: !autosave)
+                record.save(validate: !autosave, memory: @memory)
               ensure
                 @autosaving_belongs_to_for[association] = false
               end

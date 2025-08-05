@@ -185,6 +185,10 @@ ActiveRecord::Schema.define do
     t.string :color
   end
 
+  create_table :buildings, force: true do |t|
+    t.string  :name
+  end
+
   create_table "CamelCase", force: true do |t|
     t.string :name
   end
@@ -854,9 +858,39 @@ ActiveRecord::Schema.define do
     t.string      :name
   end
 
+  create_table :envelopes, force: :cascade do |t|
+    t.string :name
+    t.references :box
+  end
+
+  create_table :sales, force: true do |t|
+    t.string :message
+    t.integer :building_id
+  end
+
+  create_table :expenses, force: true do |t|
+    t.string :message
+    t.integer :building_id
+  end
+  create_table :listings, force: true do |t|
+    t.string :name
+    t.integer :building_id
+  end
+  
   create_table :notifications, force: true do |t|
     t.string :message
   end
+
+
+  create_table :notes, force: :cascade do |t|
+    t.string :name
+    t.references :envelope
+  end
+
+  create_table :boxes, force: :cascade do |t|
+    t.string :name
+  end
+
 
   create_table :numeric_data, force: true do |t|
     t.decimal :bank_balance, precision: 10, scale: 2

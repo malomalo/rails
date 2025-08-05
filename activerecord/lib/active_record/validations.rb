@@ -45,13 +45,46 @@ module ActiveRecord
     # The regular {ActiveRecord::Base#save}[rdoc-ref:Persistence#save] method is replaced
     # with this when the validations module is mixed in, which it is by default.
     def save(**options)
-      perform_validations(options) ? super : false
+      if perform_validations(options)
+        begin
+          memory_was = @memory
+          @memory = options[:memory] || {}
+          # Initiator is here to prevent auto saving an object that is being
+          # added to a association. ie:
+          #
+          # user = User.create(name: 'me')
+          # user.name = 'you'
+          # user.post << Post.new(title: 'post') # triggers auto save of user
+          #                                      # when I don't think it should
+          @memory["saved#{options[:initiator].object_id}"] = true if options[:initiator]
+          @memory["saved#{self.object_id}"] = true
+          @memory[self.object_id] = false
+          @memory["saved#{self.object_id}"] = super
+        ensure
+          @memory = memory_was
+        end
+      else
+        false
+      end
     end
 
     # Attempts to save the record just like {ActiveRecord::Base#save}[rdoc-ref:Base#save] but
     # will raise an ActiveRecord::RecordInvalid exception instead of returning +false+ if the record is not valid.
     def save!(**options)
-      perform_validations(options) ? super : raise_validation_error
+      if perform_validations(options)
+        begin
+          memory_was = @memory
+          @memory = options[:memory] || {}
+          @memory["saved#{options[:initiator].object_id}"] = true if options[:initiator]
+          @memory["saved#{self.object_id}"] = true
+          @memory[self.object_id] = false
+          @memory["saved#{self.object_id}"] = super
+        ensure
+          @memory = memory_was
+        end
+      else
+        raise_validation_error
+      end
     end
 
     # Runs all the validations within the specified context. Returns +true+ if
@@ -66,10 +99,17 @@ module ActiveRecord
     #
     # \Validations with no <tt>:on</tt> option will run no matter the context. \Validations with
     # some <tt>:on</tt> option will only run in the specified context.
-    def valid?(context = nil)
+    def valid?(context = nil, memory = nil)
       context ||= default_validation_context
+      memory_was = @memory
+      @memory = memory || {}
+      @memory["valid#{self.object_id}"] = true
+      @memory[self.object_id] = false
+      
       output = super(context)
       errors.empty? && output
+    ensure
+      @memory = memory_was
     end
 
     alias_method :validate, :valid?
@@ -88,7 +128,7 @@ module ActiveRecord
     end
 
     def perform_validations(options = {})
-      options[:validate] == false || valid?(options[:context])
+      options[:validate] == false || valid?(options[:context], options[:memory])
     end
   end
 end

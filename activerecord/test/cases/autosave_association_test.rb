@@ -41,6 +41,14 @@ require "models/chef"
 require "models/cake_designer"
 require "models/drink_designer"
 require "models/cpk"
+require "models/note"
+require "models/envelope"
+require "models/box"
+require "models/building"
+require "models/listing"
+require "models/sale"
+require "models/expense"
+
 
 class TestAutosaveAssociationsInGeneral < ActiveRecord::TestCase
   def test_autosave_works_even_when_other_callbacks_update_the_parent_model
@@ -2405,4 +2413,198 @@ class TestAutosaveAssociationOnABelongsToAssociationDefinedAsRecord < ActiveReco
       translation.save!
     end
   end
+end
+
+
+class TestCircularAutosaveAssociations < ActiveRecord::TestCase
+  def setup
+    super
+    
+    @parent = Envelope.create!(name: "P")
+    @child = Note.new(name: "Hi!")
+    @child.envelope = @parent
+
+    @child.save!
+  end
+
+  def test_previous_changes_are_present_after_saves
+    @grandparent = Box.new(name: "G")
+    @parent = Envelope.new(name: "P", box: @grandparent)
+    @child = Note.new(name: "Hi!")
+    @child.envelope = @parent
+
+    @child.save!
+
+    assert_equal [nil, "G"], @grandparent.previous_changes[:name]
+    assert_equal [nil, "P"], @parent.previous_changes[:name]
+    assert_equal [nil, "Hi!"], @child.previous_changes[:name]
+
+    @parent.class.class_variable_set("@@after_save_foo", 0)
+    @parent.class.class_variable_set("@@after_validation_foo", 0)
+
+    @parent.update!(name: "pp")
+    assert_equal 1, @parent.class.class_variable_get("@@after_save_foo")
+    assert_equal 1, @parent.class.class_variable_get("@@after_validation_foo")
+  end
+
+  # The case below fail, because
+  # https://github.com/rails/rails/blob/v4.2.7.1/activerecord/lib/active_record/autosave_association.rb#L441
+  # there `record.changed_for_autosave?` is true through it's not changed.
+  # It's true because `child` is changed.
+  # Therefore child is being saved in the wrong place, then saved one more time
+  # where it should be saved and as a result we see that `child.previous_changes` is {}
+  def test_previous_changes_are_present_after_save
+    assert_equal [nil, "Hi!"], @child.previous_changes[:name]
+  end
+
+  # This case pass because of another thing
+  # https://github.com/rails/rails/blob/v4.2.7.1/activerecord/lib/active_record/autosave_association.rb#L432
+  # association there is nil. But if I put debugger there and eval `parent` manually it would work
+  # as the third case.
+  def test_prev_changes_pass
+    child2 = Note.create!(name: "2", envelope_id: @parent.id)
+    assert_equal [nil, "2"], child2.previous_changes[:name]
+  end
+
+  # This also fail for the same reason as test_prev_changes
+  def test_prev_changes2
+    child3 = Note.create!(name: "3", envelope: @parent)
+    assert_equal [nil, "3"], child3.previous_changes[:name]
+  end
+
+  # This case fails because of similar behaviour in different place
+  def test_after_validation
+    @parent.class.class_variable_set("@@after_validation_foo", 0)
+    @parent.update!(name: "pp")
+    assert_equal 1, @parent.class.class_variable_get("@@after_validation_foo")
+  end
+end
+
+class TestCircularAutosaveAssociationsTreeTraversal < ActiveRecord::TestCase
+
+  def test_cyclic_autosaves_do_not_call_validation_and_save_on_the_same_model_multiple_times
+    expense = Expense.new(message: "Expense")
+    sale = Sale.new(message: "Sale")
+    building = Building.new(name: "Building A", expenses: [expense], sales: [sale])
+    listing = Listing.new(building: building)
+
+    assert_called(building, :save, nil, times: 1) do
+    assert_called(building, :valid?, nil, times: 1) do
+      listing.save
+    end
+    end
+  end
+
+  def assert_called_with_native(object, method_name, args, returns: false, **kwargs, &block)
+    mock = Minitest::Mock.new
+    mock.expect(method_name, returns, args, **kwargs)
+
+    object.stub(method_name, proc { |*x, **y| mock.send(method_name, *x,**y); object.send("__minitest_stub__#{method_name}", *x, **y) }, &block)
+
+    assert_mock(mock)
+  end
+  
+  def test_autosaves_call_save_or_valid_with_memory_get_passed_to_associations
+    expense = Expense.new(message: "Expense")
+    sale = Sale.new(message: "Sale")
+    building = Building.new(name: "Building A", expenses: [expense], sales: [sale])
+    listing = Listing.new(building: building)
+
+    assert_called_with_native(building, :save, [], validate: false, memory: {
+      "saved#{listing.object_id}" => true, listing.object_id => false
+    }) do
+      assert_called_with_native(sale, :save, [], validate: false, initiator: building, memory: {
+        "saved#{listing.object_id}" => true, listing.object_id => false,
+        "saved#{building.object_id}" => true, building.object_id => false,
+        "saved#{sale.object_id}" => true
+      }) do
+        assert_called_with_native(expense, :save, [], validate: false, initiator: building, memory: {
+          "saved#{listing.object_id}" => true, listing.object_id => false,
+          "saved#{building.object_id}" => true, building.object_id => false,
+          "saved#{sale.object_id}" => true, sale.object_id => false,
+          "saved#{expense.object_id}" => true
+        }) do
+          listing.save
+        end
+      end
+    end
+  end
+
+  def log_method_calls(objects, method_name, method_calls = [], &block)
+    if objects.is_a?(Array) && objects.size > 1
+      object = objects.shift
+      object.stub(method_name, proc { |*x, **y|
+        method_calls << [object.object_id, method_name, x, y.transform_values { |o| o.is_a?(ActiveRecord::Base) ? o.object_id : o.deep_dup}]
+        object.send("__minitest_stub__#{method_name}", *x, **y)
+      }) do
+          log_method_calls(objects, method_name, method_calls, &block)
+      end
+    else
+      object = objects.is_a?(Array) ? objects.first : objects
+      object.stub(method_name, proc { |*x, **y|
+        method_calls << [object.object_id, method_name, x, y.transform_values { |o| o.is_a?(ActiveRecord::Base) ? o.object_id : o.deep_dup}]
+        object.send("__minitest_stub__#{method_name}", *x, **y)
+      }, &block)
+    end
+  end
+
+  def test_nested_saves_in_callbacks_have_their_own_memory
+    expense = Expense.new(message: "Expense")
+    sale = Sale.new(message: "doublesave")
+    building = Building.new(name: "Building", expenses: [expense], sales: [sale])
+    listing = Listing.new(building: building)
+    
+    method_calls = []
+    log_method_calls([listing, building, sale, expense], :save, method_calls) do
+      listing.save
+    end
+    
+    [
+      [listing.object_id,   :save, [], {}],
+      [building.object_id,  :save, [], {
+        validate: false,
+        memory: { "saved#{listing.object_id}"=>true, listing.object_id=>false }
+      }],
+      [sale.object_id,      :save, [], {
+        validate: false,
+        initiator: building.object_id,
+        memory: {
+          "saved#{listing.object_id}"=>true,
+          listing.object_id=>false,
+          "saved#{building.object_id}"=>true,
+          building.object_id=>false,
+          "saved#{sale.object_id}"=>true
+          # sale.object_id => false
+        }
+      }],
+      [building.object_id,  :save, [], {}],
+      [expense.object_id,   :save, [], {
+        validate: false,
+        initiator: building.object_id,
+        memory: {
+          "saved#{building.object_id}"=>true,
+          building.object_id=>false,
+          "saved#{expense.object_id}"=>true,
+          expense.object_id=>true
+        }
+      }],
+      [expense.object_id,   :save, [], {
+        validate: false,
+        initiator: building.object_id,
+        memory: {
+          "saved#{listing.object_id}"=>true,
+          listing.object_id=>false,
+          "saved#{building.object_id}"=>true,
+          building.object_id=>false,
+          "saved#{sale.object_id}"=>true,
+          sale.object_id=>false,
+          "saved#{expense.object_id}"=>true
+          # expense.object_id =>false
+        }
+      }]
+    ].each do |expected|
+      assert_equal expected, method_calls.shift
+    end
+  end
+  
 end
