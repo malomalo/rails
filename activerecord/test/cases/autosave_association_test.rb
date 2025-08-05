@@ -2510,20 +2510,23 @@ class TestCircularAutosaveAssociationsTreeTraversal < ActiveRecord::TestCase
     building = Building.new(name: "Building A", expenses: [expense], sales: [sale])
     listing = Listing.new(building: building)
 
-
-    assert_called_with_native(building, :save, [], validate: false, memory: {"saved#{listing.object_id}" => true, listing.object_id => false}) do
-    assert_called_with_native(sale, :save, [], validate: false, memory: {
-      "saved#{listing.object_id}" => true, listing.object_id => false,
-      "saved#{building.object_id}" => true, building.object_id => false,
-      "saved#{sale.object_id}" => true}) do
-    assert_called_with_native(expense, :save, [], validate: false, memory: {
-      "saved#{listing.object_id}" => true, listing.object_id => false,
-      "saved#{building.object_id}" => true, building.object_id => false,
-      "saved#{sale.object_id}" => true, sale.object_id => false,
-      "saved#{expense.object_id}" => true}) do
-      listing.save
-    end
-    end
+    assert_called_with_native(building, :save, [], validate: false, memory: {
+      "saved#{listing.object_id}" => true, listing.object_id => false
+    }) do
+      assert_called_with_native(sale, :save, [], validate: false, initiator: building, memory: {
+        "saved#{listing.object_id}" => true, listing.object_id => false,
+        "saved#{building.object_id}" => true, building.object_id => false,
+        "saved#{sale.object_id}" => true
+      }) do
+        assert_called_with_native(expense, :save, [], validate: false, initiator: building, memory: {
+          "saved#{listing.object_id}" => true, listing.object_id => false,
+          "saved#{building.object_id}" => true, building.object_id => false,
+          "saved#{sale.object_id}" => true, sale.object_id => false,
+          "saved#{expense.object_id}" => true
+        }) do
+          listing.save
+        end
+      end
     end
   end
 
@@ -2531,7 +2534,7 @@ class TestCircularAutosaveAssociationsTreeTraversal < ActiveRecord::TestCase
     if objects.is_a?(Array) && objects.size > 1
       object = objects.shift
       object.stub(method_name, proc { |*x, **y|
-        method_calls << [object.object_id, method_name, x, y.deep_dup]
+        method_calls << [object.object_id, method_name, x, y.transform_values { |o| o.is_a?(ActiveRecord::Base) ? o.object_id : o.deep_dup}]
         object.send("__minitest_stub__#{method_name}", *x, **y)
       }) do
           log_method_calls(objects, method_name, method_calls, &block)
@@ -2539,7 +2542,7 @@ class TestCircularAutosaveAssociationsTreeTraversal < ActiveRecord::TestCase
     else
       object = objects.is_a?(Array) ? objects.first : objects
       object.stub(method_name, proc { |*x, **y|
-        method_calls << [object.object_id, method_name, x, y.deep_dup]
+        method_calls << [object.object_id, method_name, x, y.transform_values { |o| o.is_a?(ActiveRecord::Base) ? o.object_id : o.deep_dup}]
         object.send("__minitest_stub__#{method_name}", *x, **y)
       }, &block)
     end
@@ -2558,11 +2561,47 @@ class TestCircularAutosaveAssociationsTreeTraversal < ActiveRecord::TestCase
     
     [
       [listing.object_id,   :save, [], {}],
-      [building.object_id,  :save, [], {validate: false, memory: {"saved#{listing.object_id}"=>true, listing.object_id=>false}}],
-      [sale.object_id,      :save, [], {validate: false, memory: {"saved#{listing.object_id}"=>true, listing.object_id=>false, "saved#{building.object_id}"=>true, building.object_id=>false, "saved#{sale.object_id}"=>true}}],
+      [building.object_id,  :save, [], {
+        validate: false,
+        memory: { "saved#{listing.object_id}"=>true, listing.object_id=>false }
+      }],
+      [sale.object_id,      :save, [], {
+        validate: false,
+        initiator: building.object_id,
+        memory: {
+          "saved#{listing.object_id}"=>true,
+          listing.object_id=>false,
+          "saved#{building.object_id}"=>true,
+          building.object_id=>false,
+          "saved#{sale.object_id}"=>true
+          # sale.object_id => false
+        }
+      }],
       [building.object_id,  :save, [], {}],
-      [expense.object_id,   :save, [], {validate: false, memory: {"saved#{building.object_id}"=>true, building.object_id=>false, "saved#{expense.object_id}"=>true, expense.object_id=>true}}],
-      [expense.object_id,   :save, [], {validate: false, memory: {"saved#{listing.object_id}"=>true, listing.object_id=>false, "saved#{building.object_id}"=>true, building.object_id=>false, "saved#{sale.object_id}"=>true, sale.object_id=>false, "saved#{expense.object_id}"=>true}}]
+      [expense.object_id,   :save, [], {
+        validate: false,
+        initiator: building.object_id,
+        memory: {
+          "saved#{building.object_id}"=>true,
+          building.object_id=>false,
+          "saved#{expense.object_id}"=>true,
+          expense.object_id=>true
+        }
+      }],
+      [expense.object_id,   :save, [], {
+        validate: false,
+        initiator: building.object_id,
+        memory: {
+          "saved#{listing.object_id}"=>true,
+          listing.object_id=>false,
+          "saved#{building.object_id}"=>true,
+          building.object_id=>false,
+          "saved#{sale.object_id}"=>true,
+          sale.object_id=>false,
+          "saved#{expense.object_id}"=>true
+          # expense.object_id =>false
+        }
+      }]
     ].each do |expected|
       assert_equal expected, method_calls.shift
     end

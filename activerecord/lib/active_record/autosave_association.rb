@@ -273,13 +273,12 @@ module ActiveRecord
     # Returns whether or not this record has been changed in any way (including whether
     # any of its nested autosave associations are likewise changed)
     def changed_for_autosave?(memory)
-      if memory.has_key?(self.object_id)
+      if new_record? || has_changes_to_save? || marked_for_destruction?
+        memory[self.object_id] = true
+      elsif memory.has_key?(self.object_id)
         memory[self.object_id]
       else
-        memory[self.object_id] = new_record? ||
-                                 has_changes_to_save? ||
-                                 marked_for_destruction? ||
-                                 nested_records_changed_for_autosave?(memory)
+        memory[self.object_id] = nested_records_changed_for_autosave?(memory)
       end
     end
 
@@ -339,6 +338,9 @@ module ActiveRecord
         record      = association && association.reader
         return unless record && (record.changed_for_autosave?(@memory) || custom_validation_context?)
 
+        #PATCH: Not sure if below lines are needed in this patch, the test fail
+        # but I think only because it's calling association_valid? even tho
+        # it doesn't do anything?
         inverse_association = reflection.inverse_of && record.association(reflection.inverse_of.name)
         return if inverse_association && (record.validating_belongs_to_for?(inverse_association) ||
           record.autosaving_belongs_to_for?(inverse_association))
@@ -380,7 +382,6 @@ module ActiveRecord
         return true if record.destroyed? || (association.options[:autosave] && record.marked_for_destruction?)
 
         context = validation_context if custom_validation_context?
-
         return memory["valid#{record.object_id}"] if memory.has_key?("valid#{record.object_id}")
 
         memory["valid#{record.object_id}"] = true
@@ -522,7 +523,7 @@ module ActiveRecord
           saved = if @memory.has_key?("saved#{record.object_id}")
             @memory["saved#{record.object_id}"]
           else
-            @memory["saved#{record.object_id}"] = record.save(validate: !autosave, memory: @memory)
+            record.save(validate: !autosave, memory: @memory)
           end
           raise ActiveRecord::Rollback if !saved && autosave
           saved
@@ -575,7 +576,7 @@ module ActiveRecord
               begin
                 @autosaving_belongs_to_for ||= {}
                 @autosaving_belongs_to_for[association] = true
-                @memory["saved#{record.object_id}"] = record.save(validate: !autosave, memory: @memory)
+                record.save(validate: !autosave, memory: @memory)
               ensure
                 @autosaving_belongs_to_for[association] = false
               end

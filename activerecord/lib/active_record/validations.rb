@@ -49,9 +49,17 @@ module ActiveRecord
         begin
           memory_was = @memory
           @memory = options[:memory] || {}
+          # Initiator is here to prevent auto saving an object that is being
+          # added to a association. ie:
+          #
+          # user = User.create(name: 'me')
+          # user.name = 'you'
+          # user.post << Post.new(title: 'post') # triggers auto save of user
+          #                                      # when I don't think it should
+          @memory["saved#{options[:initiator].object_id}"] = true if options[:initiator]
           @memory["saved#{self.object_id}"] = true
           @memory[self.object_id] = false
-          super
+          @memory["saved#{self.object_id}"] = super
         ensure
           @memory = memory_was
         end
@@ -67,9 +75,10 @@ module ActiveRecord
         begin
           memory_was = @memory
           @memory = options[:memory] || {}
+          @memory["saved#{options[:initiator].object_id}"] = true if options[:initiator]
           @memory["saved#{self.object_id}"] = true
           @memory[self.object_id] = false
-          super
+          @memory["saved#{self.object_id}"] = super
         ensure
           @memory = memory_was
         end

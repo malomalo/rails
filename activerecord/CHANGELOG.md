@@ -340,10 +340,8 @@
     [`config.active_record.use_legacy_signed_id_verifier`]: https://guides.rubyonrails.org/v8.1/configuring.html#config-active-record-use-legacy-signed-id-verifier
 
     *Ali Sepehri*, *Jonathan Hefner*
->>>>>>> main
 
 *   Prepend `extra_flags` in postgres' `structure_load`
-
 
     When specifying `structure_load_flags` with a postgres adapter, the flags
     were appended to the default flags, instead of prepended.

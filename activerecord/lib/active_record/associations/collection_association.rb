@@ -376,9 +376,9 @@ module ActiveRecord
         # Do the relevant stuff to insert the given record into the association collection.
         def insert_record(record, validate = true, raise = false, memory = nil, &block)
           if raise
-            record.save!(validate: validate, memory: memory, &block)
+            record.save!(validate: validate, initiator: owner, memory: memory, &block)
           else
-            record.save(validate: validate, memory: memory, &block)
+            record.save(validate: validate, initiator: owner, memory: memory, &block)
           end
         end
 
